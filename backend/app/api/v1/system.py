@@ -34,21 +34,19 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
     from app.models.ops import ExceptionRecord
+    from app.services import dashboard
 
     pending_exceptions = (
         db.query(ExceptionRecord).filter(ExceptionRecord.status == "pending").count()
     )
     return {
-        "phase": 0,
-        "phaseName": "Phase 0 工程基础",
+        "phase": 6,
+        "phaseName": "Phase 6 期初+异常+月结",
         "accessMode": "lan_trusted",
-        "dataState": "empty",
+        "dataState": "partial",
         "integrations": integration_service.integration_status(db),
         "pendingExceptions": pending_exceptions,
-        "nextMilestone": "Phase 1 吉客云真实连接与主数据",
-        # 经营指标（Phase 2 数据落地后填充真实值；现在如实为空）
-        "metrics": {
-            "salesAmount": None, "netSales": None, "orderCount": None, "refundRate": None,
-            "grossProfit": None, "receivable": None, "received": None, "pendingReceive": None,
-        },
+        "nextMilestone": "吉客云开放平台开通 → Phase 1 数据落地 → 经营看板出数",
+        # 经营指标：真实聚合本地库（规格 4 首屏 9 指标），数据为空如实 None
+        "metrics": dashboard.overview_metrics(db),
     }

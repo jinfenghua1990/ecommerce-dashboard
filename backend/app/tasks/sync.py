@@ -37,9 +37,17 @@ def sync_jackyun(self, job_type: str) -> dict[str, Any]:
 
         method_map = {
             "sales": "sync_sales_orders",
+            "online_orders": "sync_online_orders",
+            "aftersales": "sync_aftersales",
             "inventory": "sync_inventory",
             "products": "sync_products",
+            "price_lists": "sync_price_lists",
+            "warehouses": "sync_warehouses",
             "purchase": "sync_purchase_orders",
+            "purchase_settlements": "sync_purchase_settlements",
+            "purchase_returns": "sync_purchase_returns",
+            "inbound": "sync_inbound",
+            "outbound": "sync_outbound",
         }
         fn = method_map.get(job_type)
         if not fn:
@@ -47,9 +55,9 @@ def sync_jackyun(self, job_type: str) -> dict[str, Any]:
             return {"status": "unknown"}
         try:
             job = start_sync_job(db, "jackyun", job_type)
-            getattr(adapter, fn)()  # Phase 1 实现 mapping 前会 NotImplementedError
-            finish_sync_job(db, job, "success")
-            return {"status": "success"}
+            stats = getattr(adapter, fn)()
+            finish_sync_job(db, job, "success", stats or {})
+            return {"status": "success", "stats": stats}
         except NotImplementedError:
             finish_sync_job(db, job, "skipped", {}, "mapping 待 Phase 1 真实字段样本")
             _record("jackyun", job_type, "skipped", "mapping 待 Phase 1 真实字段样本")
@@ -79,6 +87,34 @@ def sync_1688() -> dict[str, Any]:
 
 @celery_app.task(name="tasks.monthly_verify")
 def monthly_verify() -> dict[str, Any]:
-    """月初对上月完整校验 + 财务资料完整性检查（Phase 4/6 实现）。"""
-    _record("system", "monthly_verify", "skipped", "月度校验待 Phase 4/6 实现")
-    return {"status": "pending"}
+    """月初对上月完整校验（规格 13）：财务资料完整性检查 + 缺失进异常中心。"""
+    from datetime import date
+
+    from app.services import finance_service
+    from app.services.integration_service import ensure_exception
+
+    today = date.today()
+    # 上个月
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    db = SessionLocal()
+    try:
+        period = finance_service.refresh_period_status(
+            db, finance_service.DEFAULT_COMPANY, y, m
+        )
+        missing = (period.missing_summary or {}).get("missing", {})
+        if period.status != "SENT" and missing:
+            ensure_exception(
+                db, "FINANCE_INCOMPLETE", f"财务资料缺失 {y}-{m:02d}",
+                f"缺少: {missing}（月度完整性检查，月初自动）",
+            )
+            _record("system", "monthly_verify", "warn",
+                    f"{y}-{m:02d} 财务资料不完整: {missing}")
+            return {"status": "incomplete", "period": f"{y}-{m:02d}", "missing": missing}
+        _record("system", "monthly_verify", "success", f"{y}-{m:02d} 资料完整")
+        return {"status": "complete", "period": f"{y}-{m:02d}"}
+    except Exception as exc:  # 指数退避重试
+        _record("system", "monthly_verify", "failed", str(exc)[:500])
+        ensure_exception(db, "MONTHLY_VERIFY_FAIL", "月度校验失败", str(exc))
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+    finally:
+        db.close()

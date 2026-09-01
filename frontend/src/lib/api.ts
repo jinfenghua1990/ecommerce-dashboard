@@ -198,3 +198,103 @@ export const profitApi = {
   compute: (year: number, month: number) =>
     jsonFetch<ProfitCompute>(`/api/v1/profit/compute?period_year=${year}&period_month=${month}`),
 };
+
+// ---------- 经营看板（Phase 2） ----------
+
+export type TrendPoint = { date: string; orders: number; salesAmount: string | null };
+export type PlatformRow = { platform: string; orders: number; salesAmount: string | null };
+export type SkuRow = { skuCode: string; goodsName: string; orders: number; salesAmount: string | null };
+export type InventorySummary = {
+  skuCount: number;
+  snapshotAt: string | null;
+  totalQuantity: string | null;
+  byWarehouse: { warehouseId: number | null; quantity: string | null; skus: number }[];
+  note?: string;
+};
+export type SalesOrderRow = {
+  id: number; orderNo: string; platform: string; storeName: string;
+  orderStatus: string; payStatus: string;
+  orderAmount: string | null; paidAmount: string | null; orderedAt: string | null;
+};
+export type AftersaleRow = {
+  id: number; aftersaleNo: string; orderNo: string; type: string; status: string;
+  refundAmount: string | null; reason: string; createdAt: string | null;
+};
+
+export const dashboardApi = {
+  salesTrend: (days = 30) => jsonFetch<TrendPoint[]>(`/api/v1/dashboard/sales-trend?days=${days}`),
+  platformRanking: () => jsonFetch<PlatformRow[]>("/api/v1/dashboard/platform-ranking"),
+  skuRanking: (limit = 20) => jsonFetch<SkuRow[]>(`/api/v1/dashboard/sku-ranking?limit=${limit}`),
+  inventory: () => jsonFetch<InventorySummary>("/api/v1/dashboard/inventory"),
+  orders: (status?: string) =>
+    jsonFetch<SalesOrderRow[]>(`/api/v1/dashboard/orders${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  aftersales: () => jsonFetch<AftersaleRow[]>("/api/v1/dashboard/aftersales"),
+};
+
+// ---------- 期初初始化（Phase 6） ----------
+
+export type OpeningRow = {
+  id: number; kind: string; ref: string; amount: string | null; quantity: string | null;
+  asOfDate: string | null; note: string; createdAt: string | null;
+};
+export type OpeningData = {
+  summary: { byKind: Record<string, string>; adjustmentCount: number; differencePool: string; skuWithCost: number };
+  items: OpeningRow[];
+};
+
+export const openingApi = {
+  list: () => jsonFetch<OpeningData>("/api/v1/opening"),
+  upsert: (body: Record<string, unknown>) =>
+    jsonFetch<{ id: number }>("/api/v1/opening", { method: "POST", body: JSON.stringify(body) }),
+  remove: (id: number) => jsonFetch<{ ok: boolean }>(`/api/v1/opening/${id}`, { method: "DELETE" }),
+  adjust: (id: number, delta: string, reason: string) =>
+    jsonFetch<{ id: number; delta: string }>(`/api/v1/opening/${id}/adjust`, {
+      method: "POST",
+      body: JSON.stringify({ delta, reason }),
+    }),
+};
+
+// ---------- 月结快照（Phase 6） ----------
+
+export type ClosingRow = {
+  id: number; periodId: number; version: number; isCurrent: boolean; period: string;
+  calculatedAt: string | null; grossProfit: string | null;
+  receivable: string | null; received: string | null; createdAt: string | null;
+};
+
+export const closingApi = {
+  versions: (year?: number, month?: number) => {
+    const q = new URLSearchParams();
+    if (year) q.set("year", String(year));
+    if (month) q.set("month", String(month));
+    return jsonFetch<ClosingRow[]>(`/api/v1/closing/versions${q.toString() ? `?${q}` : ""}`);
+  },
+  snapshot: (year: number, month: number) =>
+    jsonFetch<{ id: number; version: number; period: string; note?: string }>("/api/v1/closing/snapshot", {
+      method: "POST",
+      body: JSON.stringify({ year, month }),
+    }),
+  recalc: (year: number, month: number) =>
+    jsonFetch<{ id: number; version: number; period: string; note: string }>("/api/v1/closing/recalc", {
+      method: "POST",
+      body: JSON.stringify({ year, month }),
+    }),
+};
+
+// ---------- 自动化（Phase 6） ----------
+
+export type ScheduleItem = { task: string; args: string; label: string; frequency: string };
+export type SyncJobRow = {
+  id: number; provider: string; jobType: string; status: string;
+  startedAt: string | null; finishedAt: string | null;
+  stats: Record<string, unknown>; errorSummary: string;
+};
+export type SyncLogRow = {
+  id: number; provider: string; level: string; message: string; jobId: number | null;
+};
+
+export const automationApi = {
+  schedule: () => jsonFetch<{ items: ScheduleItem[]; note: string }>("/api/v1/automation/schedule"),
+  jobs: (limit = 50) => jsonFetch<SyncJobRow[]>(`/api/v1/automation/jobs?limit=${limit}`),
+  logs: (limit = 100) => jsonFetch<SyncLogRow[]>(`/api/v1/automation/logs?limit=${limit}`),
+};

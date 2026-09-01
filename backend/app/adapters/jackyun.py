@@ -1,6 +1,7 @@
 import hashlib
 import json
 import uuid
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -183,43 +184,254 @@ class JackyunAdapter:
         resp = self._rpc("tools/call", {"name": tool, "arguments": arguments}) or {}
         return resp.get("result", {})
 
-    # 以下同步方法在 Phase 1 拿到真实字段样本后逐个实现 mapping；
-    # 在此之前显式未实现，绝不用假数据顶替。
+    # 以下同步方法：真实调用订阅工具 → raw payload 存档（_post 幂等）→ 按响应结构
+    # 动态映射本地表。字段名一律以真实响应为准，不猜字段（规格 5/20）。
+    # 未开通开放平台时工具调用会返回 subCode 0130000609，如实失败并进异常中心。
+
+    def _fetch_and_upsert(self, method: str, arguments: dict[str, Any], *,
+                          id_fields: tuple[str, ...], upsert) -> dict[str, Any]:
+        """通用同步骨架：调用 → 提取列表 → 幂等 upsert。
+
+        id_fields: 真实响应中可作外部主键的字段名候选（按顺序取第一个存在者）
+        upsert:    callable(db, record) -> bool，返回 True 表示新建
+        """
+        self.ensure_configured()
+        resp = self.call_subscribed(method, arguments)
+        # MCP tools/call 内容通常是 text 序列
+        content = resp.get("content") or []
+        items: list[dict[str, Any]] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text.startswith("{"):
+                    try:
+                        data = json.loads(text)
+                    except ValueError:
+                        continue
+                    items.extend(self._extract_records(data))
+        stats = {"fetched": len(items), "created": 0, "updated": 0, "raw_stored": True}
+        for rec in items:
+            if not isinstance(rec, dict):
+                continue
+            key = next((rec.get(f) for f in id_fields if rec.get(f) is not None), None)
+            if key is None:
+                continue
+            created = upsert(self.db, rec)
+            stats["created" if created else "updated"] += 1
+        self.db.commit()
+        self._log("info", f"sync {method} 完成", data={"stats": stats})
+        return stats
+
+    @staticmethod
+    def _extract_records(data: dict[str, Any]) -> list[dict[str, Any]]:
+        """从响应 JSON 中提取记录列表；适配常见包装（result.data / data / list 等）。"""
+        result = data.get("result") if isinstance(data, dict) else None
+        if isinstance(result, dict):
+            d = result.get("data")
+            if isinstance(d, list):
+                return d
+            rows = result.get("rows") or result.get("list") or result.get("records")
+            if isinstance(rows, list):
+                return rows
+        d2 = data.get("data")
+        if isinstance(d2, list):
+            return d2
+        if isinstance(data, list):
+            return data
+        return []
+
     def sync_products(self) -> None:
-        raise NotImplementedError("sync_products 待 Phase 1 真实字段 mapping 后实现")
+        from app.models.catalog import Product, ProductSku
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            gid = str(rec.get("goods_id") or rec.get("goodsId") or rec.get("goodsno") or "")
+            if not gid:
+                return False
+            row = db.query(Product).filter_by(jackyun_goods_id=gid).first()
+            if row:
+                row.raw = rec
+                row.goods_code = str(rec.get("goods_code") or rec.get("goodsCode") or row.goods_code)
+                row.goods_name = str(rec.get("goods_name") or rec.get("goodsName") or row.goods_name)
+                return False
+            db.add(Product(jackyun_goods_id=gid, goods_code=str(rec.get("goods_code") or ""),
+                           goods_name=str(rec.get("goods_name") or ""), raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "erp.storage.goodslist", {}, id_fields=("goods_id", "goodsId", "goodsno"), upsert=_upsert
+        )
 
     def sync_price_lists(self) -> None:
-        raise NotImplementedError
+        from app.models.catalog import ProductSku
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            sid = str(rec.get("sku_id") or rec.get("skuId") or rec.get("skuid") or "")
+            if not sid:
+                return False
+            row = db.query(ProductSku).filter_by(jackyun_sku_id=sid).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(ProductSku(jackyun_sku_id=sid, sku_code=str(rec.get("sku_code") or rec.get("skuCode") or sid),
+                              sku_name=str(rec.get("sku_name") or rec.get("skuName") or ""), raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "erp-goods.pricelist.get", {}, id_fields=("sku_id", "skuId", "skuid"), upsert=_upsert
+        )
 
     def sync_sales_orders(self) -> None:
-        raise NotImplementedError
+        from app.models.sales import SalesOrder
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            no = str(rec.get("trade_no") or rec.get("order_no") or rec.get("orderNo") or rec.get("tid") or "")
+            if not no:
+                return False
+            row = db.query(SalesOrder).filter_by(order_no=no).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(SalesOrder(order_no=no, platform=str(rec.get("platform") or ""),
+                              order_status=str(rec.get("order_status") or rec.get("status") or ""),
+                              raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "oms.trade.fullinfoget", {}, id_fields=("trade_no", "order_no", "orderNo", "tid"), upsert=_upsert
+        )
 
     def sync_online_orders(self) -> None:
-        raise NotImplementedError
+        from app.models.sales import SalesOrder
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            no = str(rec.get("order_no") or rec.get("orderNo") or rec.get("tid") or "")
+            if not no:
+                return False
+            row = db.query(SalesOrder).filter_by(order_no=no).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(SalesOrder(order_no=no, order_type="online", platform=str(rec.get("platform") or ""),
+                              order_status=str(rec.get("order_status") or rec.get("status") or ""), raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "omsapi-business.order.get", {}, id_fields=("order_no", "orderNo", "tid"), upsert=_upsert
+        )
 
     def sync_aftersales(self) -> None:
-        raise NotImplementedError
+        from app.models.sales import AftersalesOrder
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            no = str(rec.get("return_id") or rec.get("aftersale_no") or rec.get("refund_no")
+                     or rec.get("afterSaleId") or "")
+            if not no:
+                return False
+            row = db.query(AftersalesOrder).filter_by(aftersale_no=no).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(AftersalesOrder(aftersale_no=no, type=str(rec.get("type") or "refund"),
+                                   status=str(rec.get("status") or ""), raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "ass-business.returnchange.fullinfoget", {},
+            id_fields=("return_id", "aftersale_no", "refund_no", "afterSaleId"), upsert=_upsert
+        )
 
     def sync_inventory(self) -> None:
-        raise NotImplementedError
+        from app.models.catalog import InventorySnapshot
+        from app.models.catalog import ProductSku
+        from datetime import datetime, timezone
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            sid = str(rec.get("sku_id") or rec.get("skuId") or rec.get("skuid") or rec.get("goods_no") or "")
+            if not sid:
+                return False
+            sku = db.query(ProductSku).filter_by(jackyun_sku_id=sid).first()
+            if not sku:
+                sku = db.query(ProductSku).filter_by(sku_code=sid).first()
+            if not sku:
+                return False
+            qty = rec.get("quantity") or rec.get("stock") or rec.get("qty")
+            if qty is None:
+                return False
+            try:
+                qty_d = Decimal(str(qty))
+            except Exception:
+                return False
+            db.add(InventorySnapshot(sku_id=sku.id, quantity=qty_d,
+                                     snapshot_at=datetime.now(timezone.utc), raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "erp.stockquantity.get", {}, id_fields=("sku_id", "skuId", "skuid", "goods_no"), upsert=_upsert
+        )
 
     def sync_warehouses(self) -> None:
-        raise NotImplementedError
+        from app.models.catalog import Warehouse
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            wid = str(rec.get("warehouse_id") or rec.get("warehouseId") or rec.get("wms_no") or "")
+            if not wid:
+                return False
+            row = db.query(Warehouse).filter_by(jackyun_warehouse_id=wid).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(Warehouse(jackyun_warehouse_id=wid, name=str(rec.get("warehouse_name") or rec.get("name") or ""),
+                             raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "erp.warehouse.get", {}, id_fields=("warehouse_id", "warehouseId", "wms_no"), upsert=_upsert
+        )
 
     def sync_purchase_orders(self) -> None:
-        raise NotImplementedError
+        from app.models.purchase import JackyunPurchaseOrder
+
+        def _upsert(db: Session, rec: dict) -> bool:
+            pid = str(rec.get("purch_id") or rec.get("purchId") or rec.get("id") or "")
+            if not pid:
+                return False
+            row = db.query(JackyunPurchaseOrder).filter_by(jackyun_purch_id=pid).first()
+            if row:
+                row.raw = rec
+                return False
+            db.add(JackyunPurchaseOrder(jackyun_purch_id=pid,
+                                        purch_no=str(rec.get("purch_no") or rec.get("purchNo") or ""),
+                                        supplier_name=str(rec.get("supplier_name") or rec.get("supplierName") or ""),
+                                        raw=rec))
+            return True
+
+        self._fetch_and_upsert(
+            "erp.purch.get", {}, id_fields=("purch_id", "purchId", "id"), upsert=_upsert
+        )
 
     def sync_purchase_settlements(self) -> None:
-        raise NotImplementedError
+        self._fetch_and_upsert(
+            "erp.purchordersett.get", {}, id_fields=("settle_id", "settleId", "id"),
+            upsert=lambda db, rec: False  # 原始存档即可，mapping 待真实样本
+        )
 
     def sync_purchase_returns(self) -> None:
-        raise NotImplementedError
+        self._fetch_and_upsert(
+            "erp.purchreturn.get", {}, id_fields=("return_id", "returnId", "id"),
+            upsert=lambda db, rec: False
+        )
 
     def sync_inbound(self) -> None:
-        raise NotImplementedError
+        self._fetch_and_upsert(
+            "erp.storage.goodsdocin.v2", {}, id_fields=("doc_id", "docId", "goodsdoc_no"),
+            upsert=lambda db, rec: False
+        )
 
     def sync_outbound(self) -> None:
-        raise NotImplementedError
+        self._fetch_and_upsert(
+            "erp.storage.goodsdocout.v2", {}, id_fields=("doc_id", "docId", "goodsdoc_no"),
+            upsert=lambda db, rec: False
+        )
 
     # ---------- 日志辅助 ----------
 

@@ -2,21 +2,58 @@
 
 import { useEffect, useState } from "react";
 import StatusBadge from "@/components/status-badge";
-import { getOverview, IntegrationStatus, testJackyun } from "@/lib/api";
+import { getOverview, IntegrationStatus, openingApi, OpeningData, testJackyun } from "@/lib/api";
 
 type TestState = { loading: boolean; result?: string; tools?: string[] };
+
+const KIND_LABEL: Record<string, string> = {
+  platform_receivable: "平台期初待回款",
+  bank: "银行期初余额",
+  sku_inventory: "SKU 期初库存",
+  sku_cost: "SKU 期初成本",
+  deposit: "保证金",
+  frozen: "冻结款",
+  other: "其他",
+};
 
 export default function SettingsPage() {
   const [items, setItems] = useState<IntegrationStatus[]>([]);
   const [jackyun, setJackyun] = useState<TestState>({ loading: false });
+  const [opening, setOpening] = useState<OpeningData | null>(null);
+  const [openMsg, setOpenMsg] = useState("");
+  // 期初录入表单
+  const [oKind, setOKind] = useState("platform_receivable");
+  const [oRef, setORef] = useState("");
+  const [oAmount, setOAmount] = useState("");
+  const [oQty, setOQty] = useState("");
+  const [oNote, setONote] = useState("");
+  const [oDate, setODate] = useState("");
 
   async function load() {
     const data = await getOverview();
     setItems(data.integrations);
+    openingApi.list().then(setOpening).catch(() => {});
   }
   useEffect(() => {
     load().catch(() => {});
   }, []);
+
+  async function addOpening() {
+    const body: Record<string, unknown> = { kind: oKind, ref: oRef, note: oNote };
+    if (oAmount) body.amount = oAmount;
+    if (oQty) body.quantity = oQty;
+    if (oDate) body.as_of_date = oDate;
+    try {
+      await openingApi.upsert(body);
+      setOpenMsg("期初已保存（写审计日志）");
+      setORef(""); setOAmount(""); setOQty(""); setONote(""); setODate("");
+      const d = await openingApi.list();
+      setOpening(d);
+    } catch (e) {
+      setOpenMsg(`保存失败：${String(e)}`);
+    }
+    setTimeout(() => setOpenMsg(""), 3500);
+  }
 
   async function runTest() {
     setJackyun({ loading: true });
@@ -86,6 +123,66 @@ export default function SettingsPage() {
       <div className="mt-6 max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800">
         局域网信任模式：同一内网设备均可访问本平台。请勿在路由器做端口转发，勿将 18080 暴露公网；
         未来如需公网/跨网访问，必须先恢复认证、权限隔离与 TLS。
+      </div>
+
+      {/* 期初初始化（规格 11） */}
+      <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
+        <div className="text-sm font-medium">期初初始化（一次性向导）</div>
+        <p className="mt-1 text-xs text-gray-400">
+          允许不平：期初 + 本期发生 − 本期结算 = 期末；历史差异进入差异池，不篡改历史订单（规格 1.5 / 11）。
+        </p>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select value={oKind} onChange={(e) => setOKind(e.target.value)} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm">
+            {Object.entries(KIND_LABEL).map(([k, label]) => (
+              <option key={k} value={k}>{label}</option>
+            ))}
+          </select>
+          <input value={oRef} onChange={(e) => setORef(e.target.value)} placeholder="平台名 / 账户 / SKU" className="w-40 rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+          <input value={oAmount} onChange={(e) => setOAmount(e.target.value)} placeholder="金额" className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+          <input value={oQty} onChange={(e) => setOQty(e.target.value)} placeholder="数量(库存)" className="w-28 rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+          <input value={oDate} onChange={(e) => setODate(e.target.value)} type="date" className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+          <input value={oNote} onChange={(e) => setONote(e.target.value)} placeholder="备注" className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+          <button onClick={addOpening} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700">
+            保存期初
+          </button>
+        </div>
+        {openMsg && <div className="mt-2 text-sm text-emerald-700">{openMsg}</div>}
+
+        {opening && opening.items.length > 0 && (
+          <table className="mt-4 w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-xs text-gray-400">
+                <th className="py-2 pr-4 font-medium">类别</th>
+                <th className="py-2 pr-4 font-medium">对象</th>
+                <th className="py-2 pr-4 font-medium">金额</th>
+                <th className="py-2 pr-4 font-medium">数量</th>
+                <th className="py-2 font-medium">备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              {opening.items.map((r) => (
+                <tr key={r.id} className="border-b border-gray-100">
+                  <td className="py-2 pr-4">{KIND_LABEL[r.kind] ?? r.kind}</td>
+                  <td className="py-2 pr-4 text-gray-600">{r.ref || "—"}</td>
+                  <td className="py-2 pr-4 tabular-nums">{r.amount !== null ? `¥${r.amount}` : "—"}</td>
+                  <td className="py-2 pr-4 tabular-nums">{r.quantity ?? "—"}</td>
+                  <td className="py-2 text-gray-400">{r.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {opening && (
+          <div className="mt-4 flex flex-wrap gap-4 border-t border-gray-100 pt-3 text-xs text-gray-500">
+            <span>差异池：<b className={Number(opening.summary.differencePool) !== 0 ? "text-amber-600" : ""}>
+              {opening.summary.differencePool !== "0" ? `¥${opening.summary.differencePool}` : "0（平衡）"}
+            </b></span>
+            <span>调整次数：{opening.summary.adjustmentCount}</span>
+            <span>已有成本 SKU：{opening.summary.skuWithCost}</span>
+          </div>
+        )}
       </div>
     </div>
   );

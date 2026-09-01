@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import MetricCard from "@/components/metric-card";
+import { closingApi, ClosingRow } from "@/lib/api";
 import { CostRow, profitApi, ProfitCompute, ProfitOverview } from "@/lib/api";
 
 const SOURCE_STYLE: Record<string, string> = {
@@ -22,12 +23,17 @@ export default function ProfitPage() {
   const [period, setPeriod] = useState("2026-08");
   const [source, setSource] = useState("default");
   const [amount, setAmount] = useState("");
+  const [versions, setVersions] = useState<ClosingRow[]>([]);
+  const [closeMsg, setCloseMsg] = useState("");
+  const [closeLoading, setCloseLoading] = useState(false);
 
   const load = useCallback(() => {
     profitApi.overview().then(setOverview).catch(() => {});
     profitApi.costs().then(setCosts).catch(() => {});
     const [y, m] = period.split("-").map(Number);
     if (y && m) profitApi.compute(y, m).then(setCompute).catch(() => {});
+    const [vy, vm] = period.split("-").map(Number);
+    if (vy && vm) closingApi.versions(vy, vm).then(setVersions).catch(() => {});
   }, [period]);
 
   useEffect(load, [load]);
@@ -47,6 +53,22 @@ export default function ProfitPage() {
     setAmount("");
     load();
     flash("成本已登记（版本号自动管理，变更写审计日志）");
+  }
+
+  async function closePeriod(mode: "snapshot" | "recalc") {
+    const [y, m] = period.split("-").map(Number);
+    if (!y || !m) return;
+    setCloseLoading(true);
+    try {
+      const res = mode === "snapshot" ? await closingApi.snapshot(y, m) : await closingApi.recalc(y, m);
+      setCloseMsg(mode === "recalc" ? `${res.note}：V${res.version}` : `已生成月结快照 V${res.version}`);
+      load();
+    } catch (e) {
+      setCloseMsg(`月结失败：${String(e)}`);
+    } finally {
+      setCloseLoading(false);
+      setTimeout(() => setCloseMsg(""), 4000);
+    }
   }
 
   const coverage = overview?.coverage ?? {};
@@ -170,6 +192,63 @@ export default function ProfitPage() {
           </div>
         )}
         <p className="mt-3 text-xs text-gray-400">{compute?.note ?? ""}</p>
+      </div>
+
+      {/* 月结快照（规格 1.6：V1 保留，重算产生 V2/V3） */}
+      <div className="mt-4 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium">月结快照 · {period}</div>
+            <p className="mt-1 text-xs text-gray-400">
+              已发送 V1 不被静默覆盖；修正/重算生成新版本（V2/V3…），版本与计算时间留痕。
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => closePeriod("snapshot")}
+              disabled={closeLoading}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {closeLoading ? "计算中…" : "生成快照"}
+            </button>
+            <button
+              onClick={() => closePeriod("recalc")}
+              disabled={closeLoading}
+              className="rounded-lg bg-white px-3 py-1.5 text-sm text-indigo-600 ring-1 ring-indigo-200 hover:bg-indigo-50 disabled:opacity-50"
+            >
+              重新计算
+            </button>
+          </div>
+        </div>
+        {closeMsg && <div className="mt-3 text-sm text-emerald-700">{closeMsg}</div>}
+        {versions.length > 0 ? (
+          <table className="mt-4 w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-xs text-gray-400">
+                <th className="py-2 pr-4 font-medium">版本</th>
+                <th className="py-2 pr-4 font-medium">毛利</th>
+                <th className="py-2 pr-4 font-medium">应回款</th>
+                <th className="py-2 pr-4 font-medium">已回款</th>
+                <th className="py-2 pr-4 font-medium">计算时间</th>
+                <th className="py-2 font-medium">当前</th>
+              </tr>
+            </thead>
+            <tbody>
+              {versions.map((v) => (
+                <tr key={v.id} className="border-b border-gray-100">
+                  <td className="py-2 pr-4 font-medium">V{v.version}</td>
+                  <td className="py-2 pr-4 tabular-nums text-gray-600">{v.grossProfit !== null ? `¥${v.grossProfit}` : "—"}</td>
+                  <td className="py-2 pr-4 tabular-nums text-gray-600">{v.receivable !== null ? `¥${v.receivable}` : "—"}</td>
+                  <td className="py-2 pr-4 tabular-nums text-gray-600">{v.received !== null ? `¥${v.received}` : "—"}</td>
+                  <td className="py-2 pr-4 text-gray-400">{v.calculatedAt ? new Date(v.calculatedAt).toLocaleString("zh-CN") : "—"}</td>
+                  <td className="py-2">{v.isCurrent ? <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">当前</span> : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="mt-3 text-xs text-gray-400">尚未生成月结快照</p>
+        )}
       </div>
     </div>
   );
