@@ -47,6 +47,11 @@ async def upload_file(
 def list_files(year: int, month: int, company: str = "", db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     from app.models.finance import ArchiveFile
 
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=422, detail=f"month 必须在 1..12，给定 {month}")
+    if year < 1900 or year > 2999:
+        raise HTTPException(status_code=422, detail=f"year 不在合理范围内，给定 {year}")
+
     q = db.query(ArchiveFile).filter_by(period_year=year, period_month=month)
     if company:
         q = q.filter_by(company=company)

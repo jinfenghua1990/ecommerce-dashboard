@@ -170,45 +170,75 @@ def package_period(db: Session, company: str, year: int, month: int, actor: str 
 
 
 def period_overview(db: Session, company: str | None = None) -> list[dict[str, Any]]:
-    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。"""
-    q = db.query(ArchiveFile)
-    if company:
-        q = q.filter_by(company=company)
+    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。
+
+    查询计划（修复 2N+1）：
+    - 1× MonthlyFinancePeriod（按 company 过滤）
+    - 1× ArchiveFile 全表或按 company 过滤
+    - 1× 聚合取文件计数（GROUP BY company/year/month）
+    - 1× FinanceDeliveryPackage JOIN 一次取所有交付包按 company/year/month 分组
+    """
+    periods_q = (
+        db.query(MonthlyFinancePeriod)
+        if not company
+        else db.query(MonthlyFinancePeriod).filter_by(company=company)
+    )
     periods: dict[tuple[str, int, int], dict[str, Any]] = {}
-    for row in (
-        db.query(MonthlyFinancePeriod).all() if not company
-        else db.query(MonthlyFinancePeriod).filter_by(company=company).all()
-    ):
+    for row in periods_q.all():
         periods[(row.company, row.period_year, row.period_month)] = {
             "company": row.company, "year": row.period_year, "month": row.period_month,
             "status": row.status, "missing": (row.missing_summary or {}).get("missing", {}),
             "requiredTypes": row.required_types or DEFAULT_REQUIRED,
         }
-    for f in q.all():
+    archive_q = db.query(ArchiveFile)
+    if company:
+        archive_q = archive_q.filter_by(company=company)
+    for f in archive_q.all():
         key = (f.company, f.period_year, f.period_month)
         if key not in periods:
             periods[key] = {
                 "company": f.company, "year": f.period_year, "month": f.period_month,
                 "status": "INCOMPLETE", "missing": {}, "requiredTypes": DEFAULT_REQUIRED,
             }
+
+    # 单查询聚合：每个 (company, year, month) 的 ArchiveFile 数量
+    file_count_rows = (
+        db.query(
+            ArchiveFile.company,
+            ArchiveFile.period_year,
+            ArchiveFile.period_month,
+            func.count(ArchiveFile.id),
+        )
+    )
+    if company:
+        file_count_rows = file_count_rows.filter(ArchiveFile.company == company)
+    file_counts: dict[tuple[str, int, int], int] = {
+        (c, y, m): n for c, y, m, n in file_count_rows.group_by(
+            ArchiveFile.company, ArchiveFile.period_year, ArchiveFile.period_month
+        ).all()
+    }
+
+    # 单查询取所有交付包
+    pkg_query = (
+        db.query(FinanceDeliveryPackage, MonthlyFinancePeriod.company,
+                 MonthlyFinancePeriod.period_year, MonthlyFinancePeriod.period_month)
+        .join(MonthlyFinancePeriod, FinanceDeliveryPackage.period_id == MonthlyFinancePeriod.id)
+        .order_by(FinanceDeliveryPackage.version)
+    )
+    if company:
+        pkg_query = pkg_query.filter(MonthlyFinancePeriod.company == company)
+    pkg_groups: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
+    for pkg, c, y, m in pkg_query.all():
+        pkg_groups.setdefault((c, y, m), []).append({
+            "id": pkg.id, "version": pkg.version, "status": pkg.status,
+            "sha256": pkg.zip_sha256[:16],
+            "createdAt": pkg.created_at.isoformat() if pkg.created_at else None,
+        })
+
     out = []
     for key, item in periods.items():
-        c, y, m = key
-        files = db.query(ArchiveFile).filter_by(company=c, period_year=y, period_month=m).all()
-        pkgs = (
-            db.query(FinanceDeliveryPackage)
-            .join(MonthlyFinancePeriod, FinanceDeliveryPackage.period_id == MonthlyFinancePeriod.id)
-            .filter(MonthlyFinancePeriod.company == c, MonthlyFinancePeriod.period_year == y,
-                    MonthlyFinancePeriod.period_month == m)
-            .order_by(FinanceDeliveryPackage.version)
-            .all()
-        )
-        item["fileCount"] = len(files)
-        item["packages"] = [
-            {"id": p.id, "version": p.version, "status": p.status,
-             "sha256": p.zip_sha256[:16], "createdAt": p.created_at.isoformat() if p.created_at else None}
-            for p in pkgs
-        ]
+        item["fileCount"] = file_counts.get(key, 0)
+        item["packages"] = pkg_groups.get(key, [])
         out.append(item)
     out.sort(key=lambda x: (x["year"], x["month"]), reverse=True)
     return out

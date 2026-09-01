@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     APP_SECRET_KEY: str = ""
     ACCESS_MODE: str = "lan_trusted"  # lan_trusted | rbac（V1 默认局域网信任）
 
+    # CORS：默认仅允许同机 Next dev (3000) + 本平台前端 (18080)。
+    # 转公网前必须改成严格白名单并启用 RBAC。
+    CORS_ALLOW_ORIGINS: str = "http://localhost:3000,http://localhost:18080,http://127.0.0.1:18080"
+
     DATABASE_URL: str = "postgresql+psycopg://ecommerce:ecommerce@postgres:5432/ecommerce"
     REDIS_URL: str = "redis://redis:6379/0"
 

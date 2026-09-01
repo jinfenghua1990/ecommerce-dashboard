@@ -153,9 +153,15 @@ def list_orders(db: Session, status: str | None = None, limit: int = 200) -> lis
     q = db.query(SalesOrder).order_by(SalesOrder.ordered_at.desc().nullslast(), SalesOrder.id.desc())
     if status:
         q = q.filter(SalesOrder.order_status == status)
+    rows = q.limit(limit).all()
+    # Bulk fetch stores to avoid N+1 (was one db.get per order)
+    store_ids = {o.store_id for o in rows if o.store_id}
+    store_map: dict[int, Store] = {}
+    if store_ids:
+        store_map = {s.id: s for s in db.query(Store).filter(Store.id.in_(store_ids)).all()}
     out = []
-    for o in q.limit(limit).all():
-        store = db.get(Store, o.store_id) if o.store_id else None
+    for o in rows:
+        store = store_map.get(o.store_id) if o.store_id else None
         out.append({
             "id": o.id, "orderNo": o.order_no, "platform": o.platform,
             "storeName": store.name if store else "",
