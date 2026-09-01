@@ -1,0 +1,20 @@
+# 秘密与数据
+.env
+data/
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Node / Next
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# 系统
+.DS_Store

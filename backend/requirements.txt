@@ -1,0 +1,14 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlalchemy>=2.0.36
+alembic>=1.14
+psycopg[binary]>=3.2
+pydantic>=2.9
+pydantic-settings>=2.6
+celery>=5.4
+redis>=5.2
+httpx>=0.28
+cryptography>=43
+python-multipart>=0.0.12
+openpyxl>=3.1
+pytest>=8.3
