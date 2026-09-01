@@ -16,7 +16,7 @@
 | Phase 1 吉客云 | 进行中 | MCP 客户端已实现（initialize/tools/list 真实调用 + raw payload 存档 + 限流 + 日志）；13 个已订阅 method 白名单已内置；业务表 mapping 待真实响应样本 |
 | Phase 2 经营看板 | 未开始 | 依赖 Phase 1 数据落地 |
 | Phase 3 采购/1688 | 骨架就绪 | 1688 Adapter OAuth 骨架 + NOT_CONFIGURED 语义完成；凭证未提供 |
-| Phase 4 浙江农信+财务资料 | 骨架就绪 | BankFileAdapter 落盘/SHA256/版本化完成；解析器待脱敏样本 |
+| Phase 4 浙江农信+财务资料 | **核心完成** | 上传归档（SHA256+版本化+同名不覆盖）/ 完整性检查（INCOMPLETE/READY）/ 原样 ZIP 打包（V1/V2 不可覆盖）/ 下载 已上线并 E2E 验证；SMTP 发送与银行文件解析仍阻塞 |
 | Phase 5 回款+利润 | 未开始 | 表模型+匹配框架字段就绪 |
 | Phase 6 期初+异常+月结 | 部分就绪 | 异常中心 API/页面可用；月结快照/邮件待 SMTP 配置 |
 
@@ -64,6 +64,7 @@
 
 ## 下一步
 
-- Phase 1：以 tools/call 拉取 erp.storage.goodslist / oms.trade.fullinfoget 真实响应样本 → 字段 mapping 文档 → 实现 sync_products / sync_sales_orders 幂等 upsert
-- 1688 应用创建（用户提供后）
-- 农信文件解析器（脱敏样本后）
+- **等待外部动作**：联系吉客云客户经理开通开放平台 API（subCode 0130000609）→ 开通后拉真实样本 → 实现 sync_products / sync_sales_orders 幂等 mapping
+- Phase 4 剩余：银行 XLSX/PDF 解析器（等脱敏样本）、SMTP 配置后开放发送链路（first/resent 记录已建）
+- Phase 3：1688 应用创建后实现 OAuth 回调与订单拉取
+- 单元测试 22/22 通过（新增财务完整性 7 项）；财务链路 E2E 已验证：缺资料拒打包 → 上传（SHA256+v1）→ READY → ZIP V1 → 下载核对 → 同名重传 v2
