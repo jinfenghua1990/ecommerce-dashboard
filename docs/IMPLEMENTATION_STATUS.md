@@ -15,7 +15,7 @@
 | Phase 0 工程基础 | 已完成 | monorepo / compose / 迁移 / healthz / 审计 / .env 边界 / 45+ 表模型 / 4 Adapter 骨架 / beat schedule / 单测 |
 | Phase 1 吉客云 | 进行中 | MCP 客户端已实现（initialize/tools/list 真实调用 + raw payload 存档 + 限流 + 日志）；13 个已订阅 method 白名单已内置；业务表 mapping 待真实响应样本 |
 | Phase 2 经营看板 | 未开始 | 依赖 Phase 1 数据落地 |
-| Phase 3 采购/1688 | 骨架就绪 | 1688 Adapter OAuth 骨架 + NOT_CONFIGURED 语义完成；凭证未提供 |
+| Phase 3 采购/1688 | **核心完成** | 手工登记真实 1688 订单（幂等）→ 多 SKU 分配 → 附加费用 → 金额平衡校验（未分配≠0 禁确认）→ 状态机 8 态 → 吉客云采购单关联 → 发票多对多 + 状态分离 + 超额拦截已上线；1688 OAuth/自动同步仍等凭证 |
 | Phase 4 浙江农信+财务资料 | **核心完成** | 上传归档（SHA256+版本化+同名不覆盖）/ 完整性检查（INCOMPLETE/READY）/ 原样 ZIP 打包（V1/V2 不可覆盖）/ 下载 已上线并 E2E 验证；SMTP 发送与银行文件解析仍阻塞 |
 | Phase 5 回款+利润 | 未开始 | 表模型+匹配框架字段就绪 |
 | Phase 6 期初+异常+月结 | 部分就绪 | 异常中心 API/页面可用；月结快照/邮件待 SMTP 配置 |
