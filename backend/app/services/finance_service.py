@@ -243,7 +243,7 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     if not os.path.exists(pkg.zip_path):
         raise RuntimeError(f"ZIP 文件缺失: {pkg.zip_path}")
 
-    to_addrs = to_addrs or list((db.query(MonthlyFinancePeriod).get(period.id).required_types or {}).get("emails", []) or [])
+    to_addrs = to_addrs or list((db.get(MonthlyFinancePeriod, period.id).required_types or {}).get("emails", []) or [])
     if not to_addrs:
         raise ValueError("未配置收件人（需在账期 required_types.emails 或发送时传入 to_addrs）")
 

@@ -129,14 +129,12 @@ def overview_metrics(db: Session) -> dict[str, Any]:
     if sales_amount > 0:
         refund_rate = f"{((refund_amount / sales_amount) * 100).quantize(Decimal('0.01'))}"
 
-    from app.models.payment import ReceivableSnapshot, SettlementRecord
     from app.models.profit import ProfitSnapshot
+    from app.services import reconciliation as rc
 
-    receivable = sum((to_decimal(s.expected_amount) for s in db.query(SettlementRecord).all()), Decimal("0"))
-    received = sum(
-        (to_decimal(sn.settled) for sn in db.query(ReceivableSnapshot).filter(ReceivableSnapshot.settled.isnot(None)).all()),
-        Decimal("0"),
-    )
+    recon = rc.overview(db)
+    receivable = to_decimal(recon["receivable"])
+    received = to_decimal(recon["received"])
     gross = db.query(ProfitSnapshot).filter(ProfitSnapshot.gross_profit.isnot(None)).order_by(ProfitSnapshot.id.desc()).first()
 
     return {

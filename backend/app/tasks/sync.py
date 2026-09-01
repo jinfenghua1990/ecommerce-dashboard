@@ -85,8 +85,8 @@ def sync_1688() -> dict[str, Any]:
         db.close()
 
 
-@celery_app.task(name="tasks.monthly_verify")
-def monthly_verify() -> dict[str, Any]:
+@celery_app.task(name="tasks.monthly_verify", bind=True, max_retries=3, default_retry_delay=60)
+def monthly_verify(self) -> dict[str, Any]:
     """月初对上月完整校验（规格 13）：财务资料完整性检查 + 缺失进异常中心。"""
     from datetime import date
 

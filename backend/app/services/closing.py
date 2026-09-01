@@ -35,7 +35,13 @@ def snapshot_of(db: Session, year: int, month: int, formula_version: str = "v1")
 def list_versions(db: Session, year: int | None = None, month: int | None = None) -> list[dict[str, Any]]:
     q = db.query(ClosingVersion)
     if year:
-        q = q.filter(ClosingVersion.period_id != 0)
+        if month:
+            q = q.filter(ClosingVersion.period_id == year * 100 + month)
+        else:
+            q = q.filter(
+                ClosingVersion.period_id >= year * 100 + 1,
+                ClosingVersion.period_id <= year * 100 + 12,
+            )
     rows = q.order_by(ClosingVersion.period_id.desc(), ClosingVersion.version.desc()).limit(200).all()
     out = []
     for r in rows:

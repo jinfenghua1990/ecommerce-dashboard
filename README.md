@@ -73,3 +73,27 @@ docker compose exec postgres pg_dump -U ecommerce ecommerce > backup_$(date +%F)
 docker compose exec -T postgres psql -U ecommerce ecommerce < backup_xxxx.sql
 tar czf data_backup_$(date +%F).tgz data/    # /data 原始文件归档
 ```
+
+## 升级说明
+
+```bash
+# 1. 拉取最新代码，先备份（见上节）
+git pull
+# 2. 重新构建并滚动重启（数据卷不动，pgdata/redisdata/data 保留）
+docker compose build
+docker compose up -d
+# 3. 应用新迁移（如有）
+docker compose exec api alembic upgrade head
+# 4. 验证
+curl -s http://127.0.0.1:18080/healthz
+docker compose ps
+```
+
+升级注意事项：
+
+- **数据库结构变更一律走 Alembic 迁移**，禁止手改表结构；`alembic upgrade head` 幂等可重复执行
+- **已发送给财务的 V1/V2 包不可覆盖**：升级不会触碰 `data/finance/*/output/` 已生成 ZIP（文件名带版本号天然隔离）
+- **原始文件只读归档**：升级不影响 `data/finance/*/original/`，同名上传自动 version 递增
+- **Celery 任务**：升级后 worker/beat 随 compose 重启自动加载新代码；未配置的外部同步（吉客云/1688/SMTP）如实跳过并写日志
+- **回滚**：代码回滚用 `git checkout <上一commit> && docker compose build && docker compose up -d`；数据回滚用备份 SQL 恢复（注意备份时间点之后的写入会丢失，先确认）
+
