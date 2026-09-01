@@ -22,6 +22,23 @@ docker compose up -d --build
 
 访问模式：`ACCESS_MODE=lan_trusted`（局域网信任，无登录）。**切勿端口转发到公网**；如需公网必须先恢复认证 + TLS。
 
+## 本地开发（前后端同时改）
+
+后端（无 `--reload`）、前端（Next production standalone）均以镜像打包运行，改代码后按改动面重建对应镜像：
+
+```bash
+make rebuild                                        # 改了 backend/ → 重建 api+worker+beat 并重启
+make rebuild-fe                                     # 改了 frontend/ → 重建后 Cmd+Shift+R 硬刷新
+```
+
+约定：
+
+- 只改后端逻辑：`make rebuild`；迁移文件务必直接写到 `backend/alembic/versions/` 落盘（`docker compose run --rm` 的 ephemeral 容器不会回写宿主）
+- 只改前端：重建 frontend 镜像即可，无需动后端
+- 改依赖（requirements.txt / package.json）：`make up` 全量重建
+- 前端类型检查：`make tsc`；后端 lint：`make lint`
+- 回归一把梭：`make test && make lint && make smoke && make migration-check`
+
 ## 首次上线清单
 
 ```text
@@ -40,6 +57,16 @@ docker compose up -d --build
 [ ] 测试邮件发送（人工确认后）
 [ ] 做数据库和 /data 备份
 ```
+
+## 三个凭证开启后的下一步
+
+| 凭证 | 开启后立即做 |
+| --- | --- |
+| 吉客云 MCP Token | 设置页「立即测试连接」验证 `initialize → tools/list`，再点「同步商品/SKU」拉主档（Phase 1 mapping 前会如实标 pending） |
+| 1688 开放平台 OAuth | 回调配好后点「立即同步」跑一次，验证 OAuth 换 token 与订单拉取（只读，不下单） |
+| 浙江农信 / SMTP | 上传测试 Excel/PDF 验证 SHA256 归档，再「生成测试 ZIP」走一遍财务包、最后「发送测试邮件」人工确认 |
+
+顺序建议：吉客云主档 → 浙江农信资料 → 1688 订单 → SMTP 邮件。每一步成功后才会解锁下一环节的「未配置」占位。
 
 ## 目录结构
 
@@ -68,11 +95,34 @@ docker compose exec api alembic revision --autogenerate -m "..."  # 生成新迁
 
 ## 备份 / 恢复
 
+一键备份（pg_dump 自定义格式 + `/data` 原始文件 tar.gz，保留最近 14 份自动滚动）：
+
 ```bash
-docker compose exec postgres pg_dump -U ecommerce ecommerce > backup_$(date +%F).sql
-docker compose exec -T postgres psql -U ecommerce ecommerce < backup_xxxx.sql
-tar czf data_backup_$(date +%F).tgz data/    # /data 原始文件归档
+./scripts/backup.sh            # 产物落 backups/db_<时间戳>.dump + data_<时间戳>.tar.gz
+./scripts/backup.sh --no-files # 只备数据库，跳过 /data
 ```
+
+恢复：
+
+```bash
+# 数据库
+docker compose exec -T postgres pg_restore -U ecommerce -d ecommerce --clean --if-exists < backups/db_xxx.dump
+# /data 原始文件
+tar xzf backups/data_xxx.tar.gz -C /
+```
+
+## Celery 死信队列
+
+Redis 无原生 DLX，采用「`task_reject_on_worker_lost` + `task_failure` 信号」等价实现：worker 崩溃（OOM/SIGKILL）时消息拒绝回队；任务重试耗尽后的最终失败会写入 Redis list `ecommerce:dead-letter`（保留 30 天），中间重试不落、避免噪声。
+
+```bash
+# 检视死信
+docker compose exec redis redis-cli LRANGE ecommerce:dead-letter 0 -1
+# 手动重投某类任务（示例：吉客云销售同步）
+docker compose exec api python -c "from app.tasks.sync import sync_jackyun; sync_jackyun.delay('sales')"
+```
+
+注：失败的每一次尝试都已同时落库（`SyncLog` + 异常中心 `ensure_exception`），死信队列是补充的 Redis 侧可重投副本。
 
 ## 升级说明
 

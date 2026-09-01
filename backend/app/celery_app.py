@@ -1,5 +1,8 @@
+import json
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import task_failure
 
 from app.config import settings
 
@@ -12,6 +15,38 @@ celery_app = Celery(
     include=["app.tasks.sync"],
 )
 
+# 死信队列：Redis 无原生 DLX，用 task_failure 信号把「最终失败」落 Redis list。
+# 中间 retry 走 task_retry 信号、不会触发 task_failure，故此处天然只收「重试耗尽后的最终失败」。
+DEAD_LETTER_KEY = "ecommerce:dead-letter"
+DEAD_LETTER_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 天
+
+
+def _push_dead_letter(payload: dict) -> None:
+    import redis as redis_lib
+
+    r = redis_lib.from_url(settings.REDIS_URL)
+    r.lpush(DEAD_LETTER_KEY, json.dumps(payload, ensure_ascii=False))
+    r.expire(DEAD_LETTER_KEY, DEAD_LETTER_TTL_SECONDS)
+
+
+@task_failure.connect
+def _on_task_failure(sender=None, task_id=None, exception=None, args=None, kwargs=None, **rest):
+    # 仅在最终失败时记录；MaxRetriesExceededError 或一次性失败都属最终失败
+    try:
+        _push_dead_letter(
+            {
+                "task": getattr(sender, "name", None),
+                "task_id": task_id,
+                "exception": type(exception).__name__ if exception else None,
+                "detail": str(exception)[:500] if exception else None,
+                "args": list(args or []),
+                "kwargs": dict(kwargs or {}),
+            }
+        )
+    except Exception:  # 死信写入失败不得影响主流程
+        pass
+
+
 celery_app.conf.update(
     timezone=settings.TZ,
     enable_utc=False,
@@ -19,6 +54,8 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     # 启动时 broker 未就绪自动重连（容器编排下 redis 可能晚于 worker 就绪）
     broker_connection_retry_on_startup=True,
+    # worker 崩溃（OOM/SIGKILL）时消息拒绝重回队列，避免 ack 后静默丢失
+    task_reject_on_worker_lost=True,
     # 任务超时护栏：MCP/网络调用可能 hang，软超时先触发可捕获异常，硬超时兜底 kill
     task_soft_time_limit=600,
     task_time_limit=900,

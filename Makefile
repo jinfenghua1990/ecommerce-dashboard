@@ -23,6 +23,11 @@ rebuild: ## 重新 build api/worker/beat 并重启
 	$(COMPOSE) build $(APP) $(WORKER) $(BEAT)
 	$(COMPOSE) up -d --no-deps $(APP) $(WORKER) $(BEAT)
 
+.PHONY: rebuild-fe
+rebuild-fe: ## 重新 build 前端并重启（改 frontend/ 后）
+	$(COMPOSE) build frontend
+	$(COMPOSE) up -d --no-deps frontend
+
 .PHONY: restart
 restart: ## 不重建仅重启 3 容器
 	$(COMPOSE) up -d --no-deps $(APP) $(WORKER) $(BEAT)
