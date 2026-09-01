@@ -35,6 +35,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.config import settings
     from app.models.ops import ExceptionRecord
     from app.services import dashboard
 
@@ -44,7 +45,7 @@ def overview(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {
         "phase": 6,
         "phaseName": "Phase 6 期初+异常+月结",
-        "accessMode": "lan_trusted",
+        "accessMode": settings.ACCESS_MODE,
         "dataState": "partial",
         "integrations": integration_service.integration_status(db),
         "pendingExceptions": pending_exceptions,

@@ -1,6 +1,6 @@
 from sqlalchemy import BigInteger, Boolean, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, PkMixin, TimestampMixin
 
@@ -11,6 +11,16 @@ class User(Base, PkMixin, TimestampMixin):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # RBAC：pbkdf2_sha256 散列，登录后签发 HMAC 令牌（见 core/auth.py）
+    hashed_password: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # user_roles 表无外键约束，显式指定 join 条件
+    roles: Mapped[list["Role"]] = relationship(
+        secondary="user_roles",
+        primaryjoin="User.id == UserRole.user_id",
+        secondaryjoin="Role.id == UserRole.role_id",
+        lazy="selectin",
+        viewonly=True,
+    )
 
 
 class Role(Base, PkMixin, TimestampMixin):

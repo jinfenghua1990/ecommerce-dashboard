@@ -1,3 +1,79 @@
+// ---------- 登录令牌（localStorage 保存，请求统一携带 Bearer） ----------
+
+const TOKEN_KEY = "ecdp_access_token";
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string) {
+  window.localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  window.localStorage.removeItem(TOKEN_KEY);
+}
+
+export function authHeaders(): Record<string, string> {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+export function redirectToLogin() {
+  if (typeof window !== "undefined") {
+    clearToken();
+    window.location.href = "/login";
+  }
+}
+
+// ---------- 认证 ----------
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  displayName: string;
+  roles: string[];
+  isActive: boolean;
+};
+
+export async function login(
+  username: string,
+  password: string,
+  rememberMe = false
+): Promise<AuthUser> {
+  const res = await fetch("/api/v1/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, remember_me: rememberMe }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `登录失败（${res.status}）`);
+  }
+  const data = (await res.json()) as { accessToken: string; user: AuthUser };
+  setToken(data.accessToken);
+  return data.user;
+}
+
+export async function fetchMe(): Promise<AuthUser> {
+  const res = await fetch("/api/v1/auth/me", { headers: authHeaders() });
+  if (!res.ok) throw new Error(`me ${res.status}`);
+  return res.json();
+}
+
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const res = await fetch("/api/v1/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(data.detail ?? `修改失败（${res.status}）`);
+  }
+}
+
 export type IntegrationStatus = {
   id: string;
   name: string;
@@ -21,13 +97,23 @@ export type Overview = {
 };
 
 export async function getOverview(): Promise<Overview> {
-  const res = await fetch("/api/v1/system/overview", { cache: "no-store" });
+  const res = await fetch("/api/v1/system/overview", {
+    cache: "no-store",
+    headers: authHeaders(),
+  });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("登录已过期");
+  }
   if (!res.ok) throw new Error(`overview ${res.status}`);
   return res.json();
 }
 
 export async function testJackyun(): Promise<{ ok: boolean; tools?: string[]; error?: string }> {
-  const res = await fetch("/api/v1/integrations/jackyun/test", { method: "POST" });
+  const res = await fetch("/api/v1/integrations/jackyun/test", {
+    method: "POST",
+    headers: authHeaders(),
+  });
   return res.json();
 }
 
@@ -45,7 +131,14 @@ export type ExceptionRow = {
 };
 
 export async function getExceptions(): Promise<ExceptionRow[]> {
-  const res = await fetch("/api/v1/exceptions", { cache: "no-store" });
+  const res = await fetch("/api/v1/exceptions", {
+    cache: "no-store",
+    headers: authHeaders(),
+  });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("登录已过期");
+  }
   if (!res.ok) throw new Error(`exceptions ${res.status}`);
   return res.json();
 }
@@ -57,7 +150,7 @@ export async function updateExceptionStatus(
 ): Promise<void> {
   await fetch(`/api/v1/exceptions/${id}/status`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ status, note }),
   });
 }
@@ -118,9 +211,13 @@ export type ReconOverview = {
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     cache: "no-store",
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
     ...init,
   });
+  if (res.status === 401) {
+    redirectToLogin();
+    throw new Error("登录已过期");
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }

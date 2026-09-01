@@ -92,3 +92,20 @@
 - Phase 3：1688 应用创建后实现 OAuth 回调与订单拉取
 - Phase 5 剩余：销售数据（吉客云）落地后校验毛利计算；贡献利润待费用数据可靠后开放
 - 自动化频率后台可配置化（当前 beat schedule 频率固定，配置界面列入下一迭代）
+
+### 2026-09-01 登录与 RBAC 上线（原"局域网信任模式"关闭）
+
+- 后端：全局鉴权依赖 `api/deps.py`（除 `/auth/login`、1688 OAuth 回调外全部 `/api/v1` 需令牌）；`core/auth.py` PBKDF2 口令散列 + HMAC-SHA256 签名令牌（12h 有效，纯标准库实现）
+- 接口：`POST /auth/login`、`GET /auth/me`、`POST /auth/change-password`、`GET|POST /auth/users`（admin 建号）；登录成功/失败/改密/建号均写审计日志
+- 数据库：迁移 `a1f2c3d4e5f6` 为 users 加 `hashed_password`；启动自动种入角色 admin/operator/viewer 与初始管理员（env：ADMIN_USERNAME / ADMIN_PASSWORD，已存在不覆盖，FORCE_ADMIN_PASSWORD=1 强制重置）
+- 前端：`/login` 登录页 + AuthShell 路由守卫 + 侧栏用户名/角色/退出按钮 + 401 统一跳转登录 + 设置页改密码卡片 + 财务 ZIP 下载链接改带 access_token（浏览器直开场景）
+- 豁免路径：`/healthz`（探针）、`/api/v1/auth/login`、`/api/v1/integrations/alibaba1688/callback`（外部重定向无请求头）
+- 验证：未登录/伪令牌 401 ✅；admin 登录 ✅；query 令牌下载走通鉴权 ✅；worker/beat 不受影响 ✅；测试 99/99 通过（新增 test_auth.py 8 项：散列回环/令牌签验/防篡改/未登录 401/登录流程/错密 401/改密码）
+- ACCESS_MODE 已切 rbac；system/overview 如实返回 rbac（原硬编码 lan_trusted 已修）
+
+### 2026-09-01 记住登录（免输入）
+
+- 登录接口新增 `remember_me`：勾选签发 30 天令牌，默认 12 小时；登录页默认勾选"记住登录（此电脑 30 天内免输入）"
+- 令牌存 localStorage（浏览器关闭不丢失），30 天内同一电脑浏览器免重复输入；取消勾选则仅记住用户名不记令牌
+- 验证：remember_me=false 令牌 0.5 天 / true 令牌 30.00 天 ✅；长令牌访问接口 200 ✅；测试 99/99 ✅
+- 注意：公共电脑请取消勾选，并在侧栏"退出"清理本机令牌

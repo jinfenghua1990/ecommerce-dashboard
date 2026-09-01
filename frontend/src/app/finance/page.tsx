@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getToken } from "@/lib/api";
 
 type Pkg = { id: number; version: number; status: string; sha256: string; createdAt: string | null };
 type Period = {
@@ -190,7 +191,7 @@ export default function FinancePage() {
             {p.packages.map((pkg) => (
               <a
                 key={pkg.id}
-                href={`/api/v1/finance/packages/${pkg.id}/download`}
+                href={`/api/v1/finance/packages/${pkg.id}/download?access_token=${getToken() ?? ""}`}
                 onClick={(e) => e.stopPropagation()}
                 className="mt-2 inline-block text-xs text-indigo-600 hover:underline"
               >

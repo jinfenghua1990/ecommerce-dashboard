@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import StatusBadge from "@/components/status-badge";
-import { getOverview, IntegrationStatus, openingApi, OpeningData, testJackyun } from "@/lib/api";
+import { changePassword, getOverview, IntegrationStatus, openingApi, OpeningData, testJackyun } from "@/lib/api";
 
 type TestState = { loading: boolean; result?: string; tools?: string[] };
 
@@ -28,6 +28,23 @@ export default function SettingsPage() {
   const [oQty, setOQty] = useState("");
   const [oNote, setONote] = useState("");
   const [oDate, setODate] = useState("");
+
+  // 修改密码
+  const [pwOld, setPwOld] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwMsg, setPwMsg] = useState("");
+
+  async function submitPassword() {
+    setPwMsg("");
+    try {
+      await changePassword(pwOld, pwNew);
+      setPwMsg("密码已修改，下次登录请使用新密码");
+      setPwOld(""); setPwNew("");
+    } catch (e) {
+      setPwMsg(`修改失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+    setTimeout(() => setPwMsg(""), 4000);
+  }
 
   async function load() {
     const data = await getOverview();
@@ -76,6 +93,38 @@ export default function SettingsPage() {
       <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
         凭证只保存在服务器端（.env / 数据库加密），不回传前端。未配置的系统如实显示，不使用模拟数据伪装连接。
       </p>
+
+      <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
+        <div className="text-sm font-medium">账号安全 · 修改密码</div>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div>
+            <div className="text-xs text-gray-500">原密码</div>
+            <input
+              type="password"
+              value={pwOld}
+              onChange={(e) => setPwOld(e.target.value)}
+              className="mt-1 block w-52 rounded-lg border border-gray-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">新密码（至少 8 位）</div>
+            <input
+              type="password"
+              value={pwNew}
+              onChange={(e) => setPwNew(e.target.value)}
+              className="mt-1 block w-52 rounded-lg border border-gray-300 px-3 py-1.5 text-sm outline-none focus:border-indigo-500"
+            />
+          </div>
+          <button
+            onClick={submitPassword}
+            disabled={!pwOld || pwNew.length < 8}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            修改密码
+          </button>
+        </div>
+        {pwMsg && <div className="mt-2 text-xs text-gray-600">{pwMsg}</div>}
+      </div>
 
       <div className="mt-6 grid max-w-3xl grid-cols-1 gap-3">
         {items.map((it) => (

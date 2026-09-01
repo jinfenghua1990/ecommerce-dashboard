@@ -12,10 +12,13 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, select
 from sqlalchemy.orm import sessionmaker
 
+from app.core.auth import create_token, hash_password
 from app.db import engine, get_db
 from app.main import app
+from app.models.org import AuditLog, Role, User, UserRole
 
 
 @pytest.fixture(scope="function")
@@ -52,6 +55,34 @@ def client(db_session) -> Generator[TestClient, None, None]:
             pass
 
     app.dependency_overrides[get_db] = _override_get_db
-    with TestClient(app) as c:
+
+    # 全局鉴权生效：为测试客户端准备已登录管理员（flush 不 commit，随事务回滚）
+    role = db_session.scalar(select(Role).where(Role.code == "admin"))
+    if role is None:
+        role = Role(code="admin", name="管理员")
+        db_session.add(role)
+        db_session.flush()
+    user = User(
+        username="pytest-admin",
+        display_name="测试管理员",
+        hashed_password=hash_password("pytest-pass-123"),
+    )
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    db_session.flush()
+    token = create_token(uid=user.id, username=user.username)
+
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as c:
+        c._pytest_user = user  # 供个别测试引用
         yield c
     app.dependency_overrides.clear()
+
+    # 业务代码 commit 会绕过事务回滚，这里显式清理测试用户及其痕迹
+    try:
+        db_session.execute(delete(UserRole).where(UserRole.user_id == user.id))
+        db_session.execute(delete(AuditLog).where(AuditLog.actor == user.username))
+        db_session.execute(delete(User).where(User.id == user.id))
+        db_session.commit()
+    except Exception:
+        pass

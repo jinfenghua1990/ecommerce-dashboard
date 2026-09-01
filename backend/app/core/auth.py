@@ -1,0 +1,89 @@
+"""登录鉴权核心：PBKDF2 口令散列 + HMAC-SHA256 签名令牌。
+
+只用标准库实现（无新增依赖，避免镜像构建风险）：
+- 口令：pbkdf2_sha256$<iterations>$<salt_hex>$<dk_hex>，常量时间比较
+- 令牌：base64url(payload).base64url(hmac_sha256(payload))，payload 含 sub/uid/exp/iat
+密钥统一派生自 APP_SECRET_KEY（服务端 .env，禁止进入前端/Git）。
+"""
+
+import base64
+import hashlib
+import hmac
+import json
+import secrets
+import time
+
+from app.config import settings
+
+_PBKDF2_ITERATIONS = 120_000
+_TOKEN_TTL_SECONDS = 12 * 3600  # 12 小时，过期重新登录
+
+
+# ---------- 口令 ----------
+
+def hash_password(plain: str) -> str:
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", plain.encode(), salt, _PBKDF2_ITERATIONS)
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(plain: str, stored: str | None) -> bool:
+    if not stored:
+        return False
+    try:
+        algo, iterations, salt_hex, dk_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac(
+            "sha256", plain.encode(), bytes.fromhex(salt_hex), int(iterations)
+        )
+        return hmac.compare_digest(dk.hex(), dk_hex)
+    except (ValueError, TypeError):
+        return False
+
+
+# ---------- 令牌 ----------
+
+def _signing_key() -> bytes:
+    if not settings.APP_SECRET_KEY:
+        raise RuntimeError("APP_SECRET_KEY 未配置，拒绝签发令牌")
+    return hashlib.sha256(settings.APP_SECRET_KEY.encode()).digest()
+
+
+def _b64e(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _b64d(data: str) -> bytes:
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def create_token(*, uid: int, username: str, ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
+    payload = {
+        "sub": username,
+        "uid": uid,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + ttl_seconds,
+    }
+    body = _b64e(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode())
+    sig = _b64e(hmac.new(_signing_key(), body.encode(), hashlib.sha256).digest())
+    return f"{body}.{sig}"
+
+
+def decode_token(token: str) -> dict | None:
+    """校验签名与有效期；通过返回 payload，失败返回 None。"""
+    if not token or token.count(".") != 1:
+        return None
+    body, sig = token.split(".")
+    try:
+        expected = hmac.new(_signing_key(), body.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64e(expected), sig):
+            return None
+        payload = json.loads(_b64d(body))
+        if not isinstance(payload, dict):
+            return None
+        if int(payload.get("exp", 0)) < time.time():
+            return None
+        return payload
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None

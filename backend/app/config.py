@@ -10,7 +10,12 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "电商经营数据平台"
     APP_SECRET_KEY: str = ""
-    ACCESS_MODE: str = "lan_trusted"  # lan_trusted | rbac（V1 默认局域网信任）
+    ACCESS_MODE: str = "lan_trusted"  # lan_trusted | rbac（rbac 时全部 /api/v1 需登录令牌）
+
+    # 初始管理员（仅首次启动创建时生效；改密码后不会被覆盖，除非 FORCE_ADMIN_PASSWORD=1）
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = ""
+    FORCE_ADMIN_PASSWORD: bool = False
 
     # CORS：默认仅允许同机 Next dev (3000) + 本平台前端 (18080)。
     # 转公网前必须改成严格白名单并启用 RBAC。
