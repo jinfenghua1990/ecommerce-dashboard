@@ -2,6 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -95,3 +96,32 @@ def download_package(pkg_id: int, db: Session = Depends(get_db)) -> FileResponse
         raise HTTPException(410, "ZIP 文件缺失（存储被移动或删除）")
     return FileResponse(pkg.zip_path, media_type="application/zip",
                         filename=pkg.zip_path.split("/")[-1])
+
+
+class SendBody(BaseModel):
+    version: int | None = None
+    to_addrs: list[str] = []
+    cc_addrs: list[str] = []
+    company: str = ""
+
+
+@router.post("/{year}/{month}/send")
+def send(year: int, month: int, body: SendBody, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """发送财务交付包：SMTP 未配置如实失败；已发 V1 重发标记 RESENT（规格 16）。"""
+    from app.adapters.base import AdapterNotConfigured
+
+    try:
+        result = finance_service.send_delivery(
+            db, body.company or finance_service.DEFAULT_COMPANY, year, month,
+            version=body.version, to_addrs=body.to_addrs or None, cc_addrs=body.cc_addrs or None,
+        )
+    except AdapterNotConfigured as exc:
+        raise HTTPException(400, str(exc))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, **result}
+
+
+@router.get("/delivery-logs")
+def delivery_logs(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    return finance_service.delivery_logs(db)

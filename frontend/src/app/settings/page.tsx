@@ -120,6 +120,36 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* 1688 OAuth（规格 7.2：未配置如实显示等待，不伪造已连接） */}
+      <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
+        <div className="text-sm font-medium">1688 采购授权</div>
+        <p className="mt-1 text-xs text-gray-400">
+          只读同步已发生的买家订单，不下单、不付款。需先在 1688 开放平台创建应用（AppKey/Secret + 回调地址），
+          配置到 .env 后点击「连接 1688」跳官方授权。
+        </p>
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/v1/integrations/alibaba1688/auth-url", { cache: "no-store" });
+                const d = await res.json();
+                if (res.ok && d.authorizationUrl) {
+                  window.location.href = d.authorizationUrl;
+                } else {
+                  setJackyun({ loading: false, result: `1688：${d.detail ?? "未配置"}` });
+                }
+              } catch (e) {
+                setJackyun({ loading: false, result: `1688：${String(e)}` });
+              }
+            }}
+            className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-indigo-600 ring-1 ring-indigo-200 hover:bg-indigo-50"
+          >
+            连接 1688
+          </button>
+          <span className="text-xs text-gray-400">回调地址示例：{typeof window !== "undefined" ? `${window.location.origin}/api/v1/integrations/alibaba1688/callback` : "…"}</span>
+        </div>
+      </div>
+
       <div className="mt-6 max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800">
         局域网信任模式：同一内网设备均可访问本平台。请勿在路由器做端口转发，勿将 18080 暴露公网；
         未来如需公网/跨网访问，必须先恢复认证、权限隔离与 TLS。

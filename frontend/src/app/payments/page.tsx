@@ -29,6 +29,39 @@ export default function PaymentsPage() {
   const [newPlatform, setNewPlatform] = useState("");
   const [newPeriod, setNewPeriod] = useState("2026-08");
   const [newExpected, setNewExpected] = useState("");
+  const [importPeriod, setImportPeriod] = useState("2026-08");
+  const [importing, setImporting] = useState(false);
+
+  async function importXlsx() {
+    const input = document.getElementById("bank-xlsx") as HTMLInputElement | null;
+    const f = input?.files?.[0];
+    if (!f) {
+      flash("请选择浙江农信交易明细 XLSX");
+      return;
+    }
+    const [y, m] = importPeriod.split("-").map(Number);
+    const fd = new FormData();
+    fd.append("file", f);
+    fd.append("account_no", "ZJRC-001");
+    fd.append("period_year", String(y));
+    fd.append("period_month", String(m));
+    setImporting(true);
+    try {
+      const res = await fetch("/api/v1/reconciliation/import-bank", { method: "POST", body: fd });
+      const d = await res.json();
+      if (res.ok) {
+        flash(`导入完成：解析 ${d.parsed} 行，新增 ${d.created} 条，重复跳过 ${d.duplicates} 条`);
+        if (input) input.value = "";
+        load();
+      } else {
+        flash(`导入失败：${d.detail}`);
+      }
+    } catch (e) {
+      flash(`导入异常：${String(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  }
 
   const load = useCallback(() => {
     reconApi.overview().then(setOverview).catch((e) => setErr(String(e)));
@@ -219,6 +252,31 @@ export default function PaymentsPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* 银行流水 XLSX 导入（规格 8.1：文件导入模式） */}
+      <div className="mt-4 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
+        <div className="text-sm font-medium">导入浙江农信交易明细（XLSX）</div>
+        <p className="mt-1 text-xs text-gray-400">
+          通用列名检测（交易日期/摘要/对方户名/收入/支出/余额/流水号），指纹幂等：重复导入只跳过不重复。
+          文件只做解析，不修改原始资料。
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input type="file" accept=".xlsx,.xls" className="text-sm" id="bank-xlsx" />
+          <input
+            value={importPeriod}
+            onChange={(e) => setImportPeriod(e.target.value)}
+            type="month"
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+          />
+          <button
+            onClick={importXlsx}
+            disabled={importing}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {importing ? "导入中…" : "导入流水"}
+          </button>
+        </div>
       </div>
 
       {/* 匹配建议 */}

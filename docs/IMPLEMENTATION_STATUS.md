@@ -15,8 +15,8 @@
 | Phase 0 工程基础 | 已完成 | monorepo / compose / 迁移 / healthz / 审计 / .env 边界 / 45+ 表模型 / 4 Adapter 骨架 / beat schedule / 单测 |
 | Phase 1 吉客云 | **代码就绪，数据侧阻塞** | MCP 客户端已实现；12 个 sync 方法已实现通用拉取骨架（真实 tools/call → raw payload 存档 → 动态幂等 upsert，字段按真实响应映射不猜死）；`tasks.sync_jackyun` 支持全部 12 种同步类型。工具调用被吉客云侧拦截 `0130000609`，开通后无需改代码 |
 | Phase 2 经营看板 | **核心完成** | `/api/v1/dashboard/*`（销售趋势/平台排行/SKU 排行/库存/订单/售后）+ 销售页、商品与库存页接真实 API（本地库聚合，空态如实显示）；总览 9 指标改为本地库真实聚合（`dashboard.overview_metrics`） |
-| Phase 3 采购/1688 | **核心完成** | 手工登记真实 1688 订单（幂等）→ 多 SKU 分配 → 附加费用 → 金额平衡校验（未分配≠0 禁确认）→ 状态机 8 态 → 吉客云采购单关联 → 发票多对多 + 状态分离 + 超额拦截已上线；1688 OAuth/自动同步仍等凭证 |
-| Phase 4 浙江农信+财务资料 | **核心完成** | 上传归档（SHA256+版本化+同名不覆盖）/ 完整性检查（INCOMPLETE/READY）/ 原样 ZIP 打包（V1/V2 不可覆盖）/ 下载 已上线并 E2E 验证；SMTP 发送与银行文件解析仍阻塞 |
+| Phase 3 采购/1688 | **核心完成** | 手工登记真实 1688 订单（幂等）→ 多 SKU 分配 → 附加费用 → 金额平衡校验（未分配≠0 禁确认）→ 状态机 8 态 → 吉客云采购单关联 → 发票多对多 + 状态分离 + 超额拦截已上线；**1688 OAuth 骨架已上线**（设置页「连接 1688」→ auth-url 跳转官方授权；callback 端点就绪，未配置 AppKey/Secret 时如实返回 waiting_config）；token 交换与订单拉取仍等凭证 |
+| Phase 4 浙江农信+财务资料 | **核心完成** | 上传归档（SHA256+版本化+同名不覆盖）/ 完整性检查（INCOMPLETE/READY）/ 原样 ZIP 打包（V1/V2 不可覆盖）/ 下载 已上线并 E2E 验证；**XLSX 交易明细解析器已上线**（`reconciliation/import-bank`：通用列名检测 + 指纹幂等导入，合成样本 E2E 验证）；**邮件发送链路已就绪**（`finance/{y}/{m}/send`：first/resent 幂等 + EmailDeliveryLog + 审计，SMTP 未配置如实报错）；银行回单 PDF 解析仍等样本 |
 | Phase 5 回款+利润 | **核心完成** | 回款：对方户名→平台映射规则（可配置+审计日志）/ 银行流水指纹幂等登记 / 应收登记 / 综合评分匹配（金额40+平台30+账期15+户名10）/ 确认→刷新应收状态 / 应回款·已回款·待回款分平台总览。利润：成本快照（优先级 实际>采购订单>默认>暂估，版本化管理）/ 毛利计算（净销售−商品成本，成本缺失返回 None 不假装精确）/ 贡献利润未开放（费用数据可靠后才启用）。前端回款页+利润页已接真实 API |
 | Phase 6 期初+异常+月结 | **核心完成** | 异常中心 API/页面可用；期初初始化向导（`/api/v1/opening/*`：7 类期初 + 差异池 + 审计日志）已上线（设置页）；月结快照 `/api/v1/closing/*`（V1 保留、重算产生 V2/V3，快照含毛利/回款指标）已上线（利润页）；自动化页改为展示真实 beat schedule + 同步任务/日志；`monthly_verify` 月初完整校验已实现（缺资料自动进异常中心）；SMTP 发送仍阻塞 |
 
@@ -69,6 +69,14 @@
 - 吉客云 12 个 sync 方法实现通用拉取骨架（raw 存档 + 动态幂等 upsert，不猜字段）；`tasks.sync_jackyun` 支持全部同步类型；`monthly_verify` 月初完整校验实现
 - 前端：销售页/商品与库存页/自动化页接真实 API；设置页加期初初始化向导；利润页加月结快照区
 - 新增单测 6 项（金额平衡规格示例/分摊尾差/float 拒绝）—— 纯逻辑层
+
+### 2026-09-01 Phase 3/4 补强（1688 OAuth 骨架 + XLSX 解析 + 邮件发送链路）
+
+- 1688：`GET /integrations/alibaba1688/auth-url`（未配置如实 400）+ `GET /integrations/alibaba1688/callback`（未配置返回 waiting_config 并进异常中心）；设置页「连接 1688」入口
+- 银行解析：`bank_file.parse_xlsx` 通用列名检测（交易日期/摘要/对方户名/收入/支出/余额/流水号，支持多种日期格式，非 XLSX/无关键列返回空）；`reconciliation/import-bank` 上传导入（指纹幂等）
+- 邮件：`finance_service.send_delivery`（SMTP 未配置如实报错；一个账期+版本仅一条 first 成功，重发标记 RESENT；写 EmailDeliveryLog + audit）；`POST /finance/{y}/{m}/send` + `GET /finance/delivery-logs`；财务页「发送给财务」按钮
+- E2E 实测：合成 XLSX 导入首次 2 条新增 → 重复导入 0 新增（幂等）✅；send 无 SMTP 返回 400 明确提示 ✅
+- 单测 59/59 通过（新增 6 项：XLSX 列检测/日期格式/合计行跳过/非交易表/空内容/发送 kind 逻辑）
 
 ## 技术决策记录
 

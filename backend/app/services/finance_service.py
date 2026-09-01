@@ -212,3 +212,88 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
         out.append(item)
     out.sort(key=lambda x: (x["year"], x["month"]), reverse=True)
     return out
+
+
+def send_delivery(db: Session, company: str, year: int, month: int, *,
+                  version: int | None = None, to_addrs: list[str] | None = None,
+                  cc_addrs: list[str] | None = None, actor: str = "lan_user") -> dict[str, Any]:
+    """发送财务交付包（规格 10 / 16）。
+
+    - SMTP 未配置 → AdapterNotConfigured（如实失败）
+    - 一个账期+版本只允许一条"首次成功发送"；再次发送标记 RESENT，不伪装成第一次
+    - 成功写 EmailDeliveryLog + audit + 更新 package.status=SENT
+    """
+    from app.adapters.mail import MailAdapter
+    from app.models.finance import EmailDeliveryLog
+
+    # 先检查 SMTP 配置，未配置如实失败（不进入后续逻辑）
+    adapter = MailAdapter()
+    adapter.ensure_configured()
+
+    period = get_or_create_period(db, company, year, month)
+    q = db.query(FinanceDeliveryPackage).filter_by(period_id=period.id)
+    if version:
+        q = q.filter_by(version=version)
+    pkg = q.order_by(FinanceDeliveryPackage.version.desc()).first()
+    if not pkg:
+        raise ValueError("该账期还没有交付包，请先打包")
+
+    import os
+
+    if not os.path.exists(pkg.zip_path):
+        raise RuntimeError(f"ZIP 文件缺失: {pkg.zip_path}")
+
+    to_addrs = to_addrs or list((db.query(MonthlyFinancePeriod).get(period.id).required_types or {}).get("emails", []) or [])
+    if not to_addrs:
+        raise ValueError("未配置收件人（需在账期 required_types.emails 或发送时传入 to_addrs）")
+
+    # 幂等：首次成功发送只允许一条
+    first_sent = (
+        db.query(EmailDeliveryLog)
+        .filter_by(package_id=pkg.id, kind="first", status="sent")
+        .first()
+    )
+    kind = "resent" if first_sent else "first"
+
+    subject = f"{company} {year}年{month:02d}月 财务资料 V{version or pkg.version}"
+    body = f"见附件 {os.path.basename(pkg.zip_path)}\n（原样资料，SHA256: {pkg.zip_sha256}）"
+    try:
+        message_id = adapter.send(subject, body, to_addrs, cc_addrs or [], [pkg.zip_path])
+    except Exception as exc:
+        log = EmailDeliveryLog(package_id=pkg.id, kind=kind, to_addrs=list(to_addrs),
+                               cc_addrs=list(cc_addrs or []), status="failed", error=str(exc)[:2000])
+        db.add(log)
+        db.commit()
+        audit(db, actor, "finance.delivery.send.failed", "email_delivery_logs", log.id,
+              {"packageId": pkg.id, "kind": kind, "error": str(exc)[:500]})
+        raise RuntimeError(f"邮件发送失败: {exc}") from exc
+
+    log = EmailDeliveryLog(package_id=pkg.id, kind=kind, to_addrs=list(to_addrs),
+                           cc_addrs=list(cc_addrs or []), status="sent",
+                           message_id=message_id or "")
+    db.add(log)
+    pkg.status = "SENT"
+    if period.status != "SENT":
+        period.status = "SENT"
+    db.commit()
+    audit(db, actor, "finance.delivery.send", "email_delivery_logs", log.id,
+          {"packageId": pkg.id, "kind": kind, "to": to_addrs, "messageId": message_id})
+    return {"packageId": pkg.id, "version": pkg.version, "kind": kind,
+            "messageId": message_id, "sentAt": log.created_at.isoformat() if log.created_at else None}
+
+
+def delivery_logs(db: Session, company: str | None = None) -> list[dict[str, Any]]:
+    from app.models.finance import EmailDeliveryLog
+
+    q = db.query(EmailDeliveryLog).order_by(EmailDeliveryLog.id.desc()).limit(200)
+    out = []
+    for r in q.all():
+        pkg = db.get(FinanceDeliveryPackage, r.package_id) if r.package_id else None
+        out.append({
+            "id": r.id, "packageId": r.package_id, "kind": r.kind,
+            "toAddrs": r.to_addrs or [], "ccAddrs": r.cc_addrs or [],
+            "status": r.status, "messageId": r.message_id, "error": r.error,
+            "createdAt": r.created_at.isoformat() if r.created_at else None,
+            "period": None,
+        })
+    return out

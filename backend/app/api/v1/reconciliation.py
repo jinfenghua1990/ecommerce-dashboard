@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -93,6 +93,30 @@ def create_transaction(body: TxnBody, db: Session = Depends(get_db)) -> dict[str
         raise HTTPException(400, str(exc))
     return {"id": row.id, "created": created,
             "fingerprint": row.fingerprint[:16], "amount": str(row.amount)}
+
+
+@router.post("/import-bank")
+async def import_bank_xlsx(
+    file: UploadFile = File(...),
+    account_no: str = Form("ZJRC-001"),
+    period_year: int = Form(...),
+    period_month: int = Form(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """上传浙江农信交易明细 XLSX → 解析 → 指纹幂等导入流水。"""
+    if not (file.filename or "").lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "仅支持 XLSX/XLS 文件")
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "空文件")
+    try:
+        result = rc.import_bank_xlsx(
+            db, account_no=account_no, content=content,
+            period_year=period_year, period_month=period_month,
+        )
+    except Exception as exc:
+        raise HTTPException(400, f"解析失败: {exc}")
+    return {"ok": True, **result}
 
 
 # ---------- 应收结算 ----------

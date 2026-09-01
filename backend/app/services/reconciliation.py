@@ -176,6 +176,60 @@ def add_transaction(db: Session, *, account_no: str, txn_date: date, direction: 
     return row, True
 
 
+def import_bank_xlsx(db: Session, *, account_no: str, content: bytes,
+                     period_year: int, period_month: int) -> dict:
+    """解析浙江农信 XLSX 并幂等导入流水（规格 8.1 / 16）。
+
+    - 解析结果逐行 add_transaction（指纹幂等，重复跳过）
+    - 记录 BankImportBatch 归档元信息
+    返回 {"parsed": N, "created": N, "duplicates": N, "skipped": N}
+    """
+    from datetime import date
+
+    from app.adapters.bank_file import parse_xlsx
+    from app.models.bank import BankImportBatch
+
+    rows = parse_xlsx(content)
+    created = duplicates = skipped = 0
+    for r in rows:
+        if not r.get("txn_date"):
+            skipped += 1
+            continue
+        amount = r.get("amount_in") or r.get("amount_out")
+        if amount is None:
+            skipped += 1
+            continue
+        direction = "in" if (r.get("amount_in") is not None and float(r.get("amount_in") or 0) > 0) else "out"
+        txn_date = date.fromisoformat(r["txn_date"])
+        try:
+            _, is_new = add_transaction(
+                db, account_no=account_no, txn_date=txn_date, direction=direction,
+                amount=amount, counterparty_name=r.get("counterparty") or "",
+                counterparty_account=r.get("counterparty_account") or "",
+                summary=r.get("summary") or "", voucher_no=r.get("voucher_no") or "",
+            )
+        except ValueError:
+            skipped += 1
+            continue
+        if is_new:
+            created += 1
+        else:
+            duplicates += 1
+
+    batch = BankImportBatch(
+        source="zjrc", file_name=f"import_{period_year:04d}{period_month:02d}.xlsx",
+        period_year=period_year, period_month=period_month,
+        row_count=created + duplicates, status="done",
+    )
+    db.add(batch)
+    db.commit()
+    audit(db, "lan_user", "bank.import.xlsx", "bank_import_batches", batch.id,
+          {"account": account_no, "parsed": len(rows), "created": created,
+           "duplicates": duplicates, "skipped": skipped,
+           "period": f"{period_year}-{period_month:02d}"})
+    return {"parsed": len(rows), "created": created, "duplicates": duplicates, "skipped": skipped}
+
+
 def add_settlement(db: Session, *, platform: str, period_year: int, period_month: int,
                    expected_amount, store_name: str = "") -> SettlementRecord:
     if not (1 <= period_month <= 12):

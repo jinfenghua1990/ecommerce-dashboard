@@ -92,11 +92,15 @@ export default function FinancePage() {
     }
   }
 
-  async function act(path: string, ok: (d: Record<string, unknown>) => string) {
+  async function act(path: string, ok: (d: Record<string, unknown>) => string, body?: unknown) {
     if (!sel) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/v1/finance/${sel.year}/${sel.month}/${path}`, { method: "POST" });
+      const res = await fetch(`/api/v1/finance/${sel.year}/${sel.month}/${path}`, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       const d = await res.json();
       setMsg(res.ok ? ok(d) : `失败：${d.detail}`);
     } finally {
@@ -216,6 +220,13 @@ export default function FinancePage() {
               className="rounded-lg bg-white px-2.5 py-1 text-xs text-gray-600 ring-1 ring-gray-200"
             >
               打包 ZIP
+            </button>
+            <button
+              onClick={() => act("send", (d) => `已发送（${d.kind === "resent" ? "重发 RESENT" : "首次 first"}）V${d.version}`)}
+              disabled={busy}
+              className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              发送给财务
             </button>
           </div>
           <div className="mt-2 overflow-hidden rounded-xl border border-gray-200 bg-white">
