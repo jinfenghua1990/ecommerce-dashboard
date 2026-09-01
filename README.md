@@ -20,7 +20,14 @@ docker compose up -d --build
 - Web：http://localhost:18080 （局域网 http://<本机IP>:18080）
 - API：容器内 8000，经前端 `/api/*` 反代；本机调试端口 127.0.0.1:25432(Postgres) 26379(Redis)
 
-访问模式：`ACCESS_MODE=lan_trusted`（局域网信任，无登录）。**切勿端口转发到公网**；如需公网必须先恢复认证 + TLS。
+访问模式由 `.env` 的 `ACCESS_MODE` 控制：
+
+- `rbac`（**当前默认，已上线**）：全部 `/api/v1` 需登录令牌，首次启动按 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 建管理员账号，改密码后不被覆盖（除非 `FORCE_ADMIN_PASSWORD=1`）。`/healthz` 无需鉴权，供聚合中心探测。
+- `lan_trusted`：局域网信任、无登录。**切勿在公网使用**；如需公网必须保持 `rbac` + TLS。
+
+首次登录用 `.env` 里的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`，登录后请立即在设置页改密码。
+
+> smoke 脚本会自动读取管理员凭证登录后再探测（`make smoke`），RBAC 下不必手工传令牌；也可 `SMOKE_USER=xxx SMOKE_PASS=yyy make smoke` 显式指定。
 
 ## 本地开发（前后端同时改）
 
@@ -42,6 +49,7 @@ make rebuild-fe                                     # 改了 frontend/ → 重�
 ## 首次上线清单
 
 ```text
+[ ] 在 .env 设管理员账号（ADMIN_USERNAME / ADMIN_PASSWORD），首次启动自动建号，登录后立即改密码
 [ ] 重置此前暴露过的吉客云 MCP Token（旧 Token 一律作废）
 [ ] 填写新的吉客云 Token 到 .env
 [ ] 设置页「立即测试连接」验证吉客云 MCP（initialize → tools/list）
