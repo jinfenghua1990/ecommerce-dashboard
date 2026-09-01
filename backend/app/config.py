@@ -25,6 +25,13 @@ class Settings(BaseSettings):
         "http://localhost:8888,http://127.0.0.1:8888"
     )
 
+    # CORS 正则：放行局域网 IP 上的 8888 聚合中心（宿主机 IP 由 DHCP 分配，无法逐个写死）。
+    # 仅覆盖 RFC1918 私网段且只匹配 8888 端口；转公网必须置空并改回严格白名单。
+    CORS_ALLOW_ORIGIN_REGEX: str = (
+        r"^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+        r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):8888$"
+    )
+
     DATABASE_URL: str = "postgresql+psycopg://ecommerce:ecommerce@postgres:5432/ecommerce"
     REDIS_URL: str = "redis://redis:6379/0"
 

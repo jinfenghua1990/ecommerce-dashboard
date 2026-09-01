@@ -17,12 +17,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.APP_NAME, version="0.1.0", lifespan=lifespan)
 
-# CORS：默认仅放行 settings.CORS_ALLOW_ORIGINS 列出的源（默认 localhost:3000/18080）。
-# LAN 信任模式下关闭 credentials；如转公网必须先收紧 + 上 RBAC + 上 TLS。
+# CORS：放行 settings.CORS_ALLOW_ORIGINS 显式白名单 + CORS_ALLOW_ORIGIN_REGEX 匹配的源
+# （正则用于局域网 IP 上的 8888 聚合中心，DHCP 下 IP 会变，无法写死）。
+# 关闭 credentials；转公网必须把正则置空并收紧为严格白名单。
 _origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
