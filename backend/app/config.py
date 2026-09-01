@@ -17,9 +17,13 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = ""
     FORCE_ADMIN_PASSWORD: bool = False
 
-    # CORS：默认仅允许同机 Next dev (3000) + 本平台前端 (18080)。
+    # CORS：默认允许同机 Next dev (3000) + 本平台前端 (18080) + 8888 聚合中心。
+    # 聚合中心需跨域读 /healthz 渲染状态点，故纳入白名单。
     # 转公网前必须改成严格白名单并启用 RBAC。
-    CORS_ALLOW_ORIGINS: str = "http://localhost:3000,http://localhost:18080,http://127.0.0.1:18080"
+    CORS_ALLOW_ORIGINS: str = (
+        "http://localhost:3000,http://localhost:18080,http://127.0.0.1:18080,"
+        "http://localhost:8888,http://127.0.0.1:8888"
+    )
 
     DATABASE_URL: str = "postgresql+psycopg://ecommerce:ecommerce@postgres:5432/ecommerce"
     REDIS_URL: str = "redis://redis:6379/0"
