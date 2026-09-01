@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -130,11 +130,15 @@ class SettlementBody(BaseModel):
 
 
 @router.get("/settlements")
-def list_settlements(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def list_settlements(
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     out = []
     for s in db.query(SettlementRecord).order_by(
         SettlementRecord.period_year.desc(), SettlementRecord.period_month.desc()
-    ).all():
+    ).limit(limit).offset(offset).all():
         settled = rc.settled_amount_of(db, s.id)
         out.append({
             "id": s.id, "platform": s.platform, "storeName": s.store_name,

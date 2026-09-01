@@ -4,10 +4,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.logging import get_logger
 from app.db import get_db
 from app.services import integration_service
 
 router = APIRouter(prefix="/system", tags=["system"])
+_log = get_logger("system.health")
 
 
 @router.get("/health")
@@ -16,8 +18,8 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         db.execute(text("SELECT 1"))
         components["database"] = "up"
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("database health probe failed: %s", exc)
     try:
         import redis as redis_lib
 
@@ -25,8 +27,8 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 
         r = redis_lib.Redis.from_url(s.REDIS_URL, socket_connect_timeout=2)
         components["redis"] = "up" if r.ping() else "down"
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("redis health probe failed: %s", exc)
     status = "ready" if all(v == "up" for v in components.values()) else "degraded"
     return {"status": status, "components": components}
 

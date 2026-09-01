@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -41,12 +41,17 @@ class CreatePOBody(BaseModel):
 
 
 @router.get("/orders")
-def list_orders(status: str | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def list_orders(
+    status: str | None = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     q = db.query(ExternalPurchaseOrder).order_by(ExternalPurchaseOrder.id.desc())
     if status:
         q = q.filter(ExternalPurchaseOrder.purchase_status == status)
     out = []
-    for po in q.limit(200).all():
+    for po in q.limit(limit).offset(offset).all():
         bal = svc.balance_of(db, po)
         out.append({
             "id": po.id, "externalOrderId": po.external_order_id, "supplierName": po.supplier_name,

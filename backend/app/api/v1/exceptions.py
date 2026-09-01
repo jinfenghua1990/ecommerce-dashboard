@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -21,11 +21,16 @@ class StatusBody(BaseModel):
 
 
 @router.get("")
-def list_exceptions(status: str | None = None, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def list_exceptions(
+    status: str | None = None,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
     q = db.query(ExceptionRecord).order_by(ExceptionRecord.id.desc())
     if status:
         q = q.filter(ExceptionRecord.status == status)
-    rows = q.limit(200).all()
+    rows = q.limit(limit).offset(offset).all()
     return [
         {
             "id": r.id, "code": r.code, "type": r.type, "severity": r.severity,
