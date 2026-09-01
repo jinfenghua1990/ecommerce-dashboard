@@ -22,7 +22,7 @@ class SettlementRecord(Base, PkMixin, TimestampMixin):
     expected_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
     source: Mapped[str] = mapped_column(String(32), default="manual")  # manual/jackyun/file
-    status: Mapped[str] = mapped_column(String(32), default="open")  # open/partial/settled
+    status: Mapped[str] = mapped_column(String(32), default="open", index=True)  # open/partial/settled
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
@@ -33,7 +33,7 @@ class ReconciliationMatch(Base, PkMixin, TimestampMixin):
 
     txn_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     target_type: Mapped[str] = mapped_column(String(32), default="")  # settlement/opening/expense
-    target_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    target_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     confidence: Mapped[str] = mapped_column(String(16), default="low")  # high/medium/low
     status: Mapped[str] = mapped_column(String(16), default="suggested")  # suggested/confirmed/rejected

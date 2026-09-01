@@ -27,7 +27,7 @@ class BankImportBatch(Base, PkMixin, TimestampMixin):
 
     source: Mapped[str] = mapped_column(String(32), default="zjrc")  # 浙江农信
     file_name: Mapped[str] = mapped_column(Text, default="")
-    archive_file_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    archive_file_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     period_year: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     period_month: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     row_count: Mapped[int] = mapped_column(BigInteger, default=0)

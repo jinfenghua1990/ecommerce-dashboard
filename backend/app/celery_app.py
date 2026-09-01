@@ -17,6 +17,16 @@ celery_app.conf.update(
     enable_utc=False,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # 启动时 broker 未就绪自动重连（容器编排下 redis 可能晚于 worker 就绪）
+    broker_connection_retry_on_startup=True,
+    # 任务超时护栏：MCP/网络调用可能 hang，软超时先触发可捕获异常，硬超时兜底 kill
+    task_soft_time_limit=600,
+    task_time_limit=900,
+    # 任务结果 1 小时后过期，避免 Redis 内存被结果元数据堆积
+    result_expires=3600,
+    # 全局退避兜底：单任务未显式写 countdown 时按 2^n 退避，封顶 600s
+    task_retry_backoff=True,
+    task_retry_backoff_max=600,
     beat_schedule={
         # 吉客云：订单/售后 15 分钟
         "jackyun-sales-15min": {

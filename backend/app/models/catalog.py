@@ -73,6 +73,6 @@ class Store(Base, PkMixin, TimestampMixin):
     jackyun_store_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(256), default="")
     platform: Mapped[str] = mapped_column(String(64), default="", index=True)
-    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)

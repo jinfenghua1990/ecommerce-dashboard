@@ -19,3 +19,6 @@ next-env.d.ts
 # 系统
 .DS_Store
 *.tsbuildinfo
+
+# 运维产物
+backups/
