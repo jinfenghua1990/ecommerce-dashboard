@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Numeric, String, Text, UniqueConstraint
@@ -32,8 +33,8 @@ class ProductSku(Base, PkMixin, TimestampMixin):
     sku_name: Mapped[str] = mapped_column(String(512), default="", index=True)
     barcode: Mapped[str] = mapped_column(String(128), default="", index=True)
     unit: Mapped[str] = mapped_column(String(32), default="")
-    sale_price: Mapped | None = mapped_column(MONEY, nullable=True)
-    default_cost: Mapped | None = mapped_column(MONEY, nullable=True)
+    sale_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    default_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
@@ -53,7 +54,7 @@ class InventorySnapshot(Base, PkMixin):
 
     sku_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     warehouse_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="jackyun")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)

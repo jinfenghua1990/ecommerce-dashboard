@@ -19,7 +19,7 @@ def test_balance_unallocated_blocks_refined():
     result = balance_check("50000", ["15000", "15000"], ["5000"])
     assert result["balanced"] is False
     assert result["allow_mark_refined"] is False
-    assert result["unallocated"] == Decimal("14500.0000")
+    assert result["unallocated"] == Decimal("15000.0000")
 
 
 def test_totals():

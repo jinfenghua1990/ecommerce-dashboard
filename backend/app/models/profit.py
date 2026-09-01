@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Numeric, String, Text, UniqueConstraint
@@ -20,10 +21,10 @@ class CostSnapshot(Base, PkMixin, TimestampMixin):
     sku_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     period_year: Mapped[int] = mapped_column(BigInteger, nullable=False)
     period_month: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    actual_cost: Mapped | None = mapped_column(MONEY, nullable=True)
-    purch_order_cost: Mapped | None = mapped_column(MONEY, nullable=True)
-    default_cost: Mapped | None = mapped_column(MONEY, nullable=True)
-    estimated_cost: Mapped | None = mapped_column(MONEY, nullable=True)
+    actual_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    purch_order_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    default_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    estimated_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="estimated")  # settlement/order/default/estimated
     version: Mapped[int] = mapped_column(BigInteger, default=1)
 
@@ -35,7 +36,7 @@ class AllocatedExpense(Base, PkMixin, TimestampMixin):
     period_month: Mapped[int] = mapped_column(BigInteger, index=True)
     expense_type: Mapped[str] = mapped_column(String(32), default="")  # platform_fee/ad/logistics/other
     dimension: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"platform":..., "store":..., "sku":...}
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="")
 
 
@@ -47,14 +48,14 @@ class ProfitSnapshot(Base, PkMixin, TimestampMixin):
     period_year: Mapped[int] = mapped_column(BigInteger, index=True)
     period_month: Mapped[int] = mapped_column(BigInteger, index=True)
     dimension: Mapped[dict] = mapped_column(JSONB, default=dict)  # company/platform/store/spu/sku
-    net_sales: Mapped | None = mapped_column(MONEY, nullable=True)
-    goods_cost: Mapped | None = mapped_column(MONEY, nullable=True)
-    gross_profit: Mapped | None = mapped_column(MONEY, nullable=True)
-    platform_fee: Mapped | None = mapped_column(MONEY, nullable=True)
-    ad_fee: Mapped | None = mapped_column(MONEY, nullable=True)
-    logistics_fee: Mapped | None = mapped_column(MONEY, nullable=True)
-    other_fee: Mapped | None = mapped_column(MONEY, nullable=True)
-    contribution_profit: Mapped | None = mapped_column(MONEY, nullable=True)
+    net_sales: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    goods_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    gross_profit: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    platform_fee: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    ad_fee: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    logistics_fee: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    other_fee: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    contribution_profit: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     formula_version: Mapped[str] = mapped_column(String(32), default="v1")
     data_version: Mapped[str] = mapped_column(String(32), default="")
     cost_missing: Mapped[bool] = mapped_column(Boolean, default=False)

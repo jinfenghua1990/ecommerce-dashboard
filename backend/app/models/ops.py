@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import date, datetime
 
 from sqlalchemy import BigInteger, Date, DateTime, Numeric, String, Text
@@ -17,8 +18,8 @@ class OpeningBalance(Base, PkMixin, TimestampMixin):
     kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     # platform_receivable / bank / sku_inventory / sku_cost / deposit / frozen / other
     ref: Mapped[str] = mapped_column(String(256), default="", index=True)  # 平台名 / 账户 / SKU
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     as_of_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
 
@@ -27,7 +28,7 @@ class OpeningAdjustment(Base, PkMixin, TimestampMixin):
     __tablename__ = "opening_adjustments"
 
     opening_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    delta: Mapped | None = mapped_column(MONEY, nullable=True)
+    delta: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(64), default="lan_user")
 

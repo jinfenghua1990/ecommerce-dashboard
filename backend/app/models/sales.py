@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Numeric, String, Text
@@ -19,8 +20,8 @@ class SalesOrder(Base, PkMixin, TimestampMixin):
     order_status: Mapped[str] = mapped_column(String(64), default="", index=True)
     pay_status: Mapped[str] = mapped_column(String(64), default="")
     buyer_note: Mapped[str] = mapped_column(Text, default="")
-    order_amount: Mapped | None = mapped_column(MONEY, nullable=True)
-    paid_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    order_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    paid_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
     ordered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -34,10 +35,10 @@ class SalesOrderItem(Base, PkMixin):
     sku_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     sku_code: Mapped[str] = mapped_column(String(128), default="", index=True)
     goods_name: Mapped[str] = mapped_column(String(512), default="")
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
-    unit_price: Mapped | None = mapped_column(MONEY, nullable=True)
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
-    discount_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    unit_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    discount_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
@@ -48,7 +49,7 @@ class AftersalesOrder(Base, PkMixin, TimestampMixin):
     order_no: Mapped[str] = mapped_column(String(128), default="", index=True)
     type: Mapped[str] = mapped_column(String(32), default="")  # refund/return/exchange
     status: Mapped[str] = mapped_column(String(64), default="", index=True)
-    refund_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    refund_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     created_at_src: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)

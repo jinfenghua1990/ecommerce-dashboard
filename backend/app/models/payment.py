@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Numeric, String, Text, UniqueConstraint
@@ -18,7 +19,7 @@ class SettlementRecord(Base, PkMixin, TimestampMixin):
     store_name: Mapped[str] = mapped_column(String(256), default="")
     period_year: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     period_month: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
-    expected_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    expected_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
     source: Mapped[str] = mapped_column(String(32), default="manual")  # manual/jackyun/file
     status: Mapped[str] = mapped_column(String(32), default="open")  # open/partial/settled
@@ -33,7 +34,7 @@ class ReconciliationMatch(Base, PkMixin, TimestampMixin):
     txn_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     target_type: Mapped[str] = mapped_column(String(32), default="")  # settlement/opening/expense
     target_id: Mapped[int] = mapped_column(BigInteger, default=0)
-    score: Mapped | None = mapped_column(Numeric(8, 4), nullable=True)
+    score: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     confidence: Mapped[str] = mapped_column(String(16), default="low")  # high/medium/low
     status: Mapped[str] = mapped_column(String(16), default="suggested")  # suggested/confirmed/rejected
     matched_platform: Mapped[str] = mapped_column(String(64), default="")
@@ -50,9 +51,9 @@ class ReceivableSnapshot(Base, PkMixin, TimestampMixin):
     platform: Mapped[str] = mapped_column(String(64), nullable=False)
     period_year: Mapped[int] = mapped_column(BigInteger, nullable=False)
     period_month: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    opening: Mapped | None = mapped_column(MONEY, nullable=True)
-    incurred: Mapped | None = mapped_column(MONEY, nullable=True)
-    settled: Mapped | None = mapped_column(MONEY, nullable=True)
-    closing: Mapped | None = mapped_column(MONEY, nullable=True)
-    difference: Mapped | None = mapped_column(MONEY, nullable=True)
+    opening: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    incurred: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    settled: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    closing: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    difference: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

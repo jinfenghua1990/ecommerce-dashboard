@@ -82,7 +82,7 @@ export default function ExceptionsPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="font-medium">{r.title}</div>
-                    {r.detail?.latest && (
+                    {Boolean(r.detail?.latest) && (
                       <div className="mt-0.5 max-w-xl truncate text-xs text-gray-400" title={String(r.detail.latest)}>
                         {String(r.detail.latest)}
                       </div>

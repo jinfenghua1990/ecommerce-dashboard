@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Numeric, String, Text, UniqueConstraint
@@ -31,8 +32,8 @@ class ExternalPurchaseOrder(Base, PkMixin, TimestampMixin):
     supplier_name: Mapped[str] = mapped_column(String(256), default="", index=True)
     title: Mapped[str] = mapped_column(Text, default="")  # 原始标题（可能为“定制专拍/OEM定制”）
     ordered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    order_amount: Mapped | None = mapped_column(MONEY, nullable=True)
-    paid_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    order_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    paid_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
     order_status: Mapped[str] = mapped_column(String(64), default="", index=True)
     pay_status: Mapped[str] = mapped_column(String(64), default="")
@@ -43,8 +44,8 @@ class ExternalPurchaseOrder(Base, PkMixin, TimestampMixin):
     purchase_status: Mapped[str] = mapped_column(String(32), default="pending_refine", index=True)
     # 发票状态与采购状态分离
     invoice_status: Mapped[str] = mapped_column(String(32), default="unverified", index=True)
-    allocated_goods_amount: Mapped | None = mapped_column(MONEY, nullable=True)
-    allocated_expense_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    allocated_goods_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    allocated_expense_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     refined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
@@ -58,8 +59,8 @@ class ExternalPurchaseOrderRawItem(Base, PkMixin):
     po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     raw_title: Mapped[str] = mapped_column(Text, default="")
     raw_spec: Mapped[str] = mapped_column(Text, default="")
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
-    raw_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    raw_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
@@ -72,9 +73,9 @@ class PurchaseAllocationItem(Base, PkMixin, TimestampMixin):
     sku_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     sku_code: Mapped[str] = mapped_column(String(128), default="", index=True)
     goods_name: Mapped[str] = mapped_column(String(512), default="")
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
-    unit_price: Mapped | None = mapped_column(MONEY, nullable=True)
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    unit_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
 
 
@@ -85,7 +86,7 @@ class PurchaseExtraExpense(Base, PkMixin, TimestampMixin):
 
     po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     expense_type: Mapped[str] = mapped_column(String(32), nullable=False)  # pack/processing/plate/mold/freight/testing/other
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     allocate_method: Mapped[str] = mapped_column(String(32), default="none")  # by_qty/by_amount/manual/none
     distribute: Mapped[dict] = mapped_column(JSONB, default=dict)
     note: Mapped[str] = mapped_column(Text, default="")
@@ -96,7 +97,7 @@ class PurchaseInvoice(Base, PkMixin, TimestampMixin):
 
     invoice_no: Mapped[str] = mapped_column(String(128), default="", index=True)
     supplier_name: Mapped[str] = mapped_column(String(256), default="")
-    invoice_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    invoice_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     invoice_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     type: Mapped[str] = mapped_column(String(32), default="")  # special/vat/other
     file_path: Mapped[str] = mapped_column(Text, default="")
@@ -111,7 +112,7 @@ class PurchaseInvoiceLink(Base, PkMixin):
 
     invoice_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    allocated_amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    allocated_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
 
 
 class JackyunPurchaseOrder(Base, PkMixin, TimestampMixin):
@@ -120,7 +121,7 @@ class JackyunPurchaseOrder(Base, PkMixin, TimestampMixin):
     jackyun_purch_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     purch_no: Mapped[str] = mapped_column(String(128), default="", index=True)
     supplier_name: Mapped[str] = mapped_column(String(256), default="")
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     status: Mapped[str] = mapped_column(String(64), default="")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
@@ -138,6 +139,6 @@ class InboundLink(Base, PkMixin, TimestampMixin):
 
     po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     goodsdoc_no: Mapped[str] = mapped_column(String(128), default="", index=True)
-    quantity: Mapped | None = mapped_column(Numeric(18, 4), nullable=True)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     inbound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)

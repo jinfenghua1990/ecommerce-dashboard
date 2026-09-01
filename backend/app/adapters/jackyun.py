@@ -43,7 +43,8 @@ class JackyunAdapter:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            "Authorization": f"Bearer {self.token}",
+            # 吉客云 MCP 实测：Authorization 直接放裸 Token，不带 Bearer 前缀
+            "Authorization": self.token,
         }
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
@@ -154,29 +155,32 @@ class JackyunAdapter:
 
     # ---------- 业务同步（Phase 1 依据真实字段 mapping 逐个实现） ----------
 
-    SUBSCRIBED_METHODS = [
-        "ass-business.returnchange.fullinfoget",
-        "erp-goods.pricelist.get",
-        "erp.allocate.get",
-        "erp.purch.get",
-        "erp.purchordersett.get",
-        "erp.purchreturn.get",
-        "erp.stockquantity.get",
-        "erp.storage.goodsdocin.v2",
-        "erp.storage.goodsdocout.v2",
-        "erp.storage.goodslist",
-        "erp.warehouse.get",
-        "oms.trade.fullinfoget",
-        "omsapi-business.order.get",
-        "wms.order.query-info.page",
-    ]
+    # 订阅清单（规格 5）：API method ↔ MCP tool 名
+    # tool 名来自 2026-09-01 真实 tools/list 响应（open-platform-mcp v1.0.0），非猜测
+    SUBSCRIBED_METHODS = {
+        "erp.storage.goodsdocin.v2": "getGoodsDocInListInfo",
+        "erp.storage.goodsdocout.v2": "getGoodsDocOutListInfo",
+        "erp.storage.goodslist": "getGoodsListInfoByGoodsNo",
+        "erp-goods.pricelist.get": "getGoodsPriceListInfo",
+        "erp.stockquantity.get": "getGoodsStockQuantityListInfo",
+        "omsapi-business.order.get": "getOrderListInfo",
+        "erp.purch.get": "getPurchOrderListInfo",
+        "erp.purchreturn.get": "getPurchOrderReturnListInfo",
+        "erp.purchordersett.get": "getPurchOrderSettleListInfo",
+        "ass-business.returnchange.fullinfoget": "getReturnChangeListInfo",
+        "wms.order.query-info.page": "getShopOrderLiseInfo",
+        "oms.trade.fullinfoget": "getTradesListInfo",
+        "erp.allocate.get": "getStockAllocateListInfo",
+        "erp.warehouse.get": "getWarehouseListInfo",
+    }
 
     def call_subscribed(self, method: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """调用已订阅工具。method 必须在订阅清单内，禁止发明。"""
+        """调用已订阅工具。method 须为 API method 名或真实 tool 名，禁止发明。"""
         self.ensure_configured()
-        if method not in self.SUBSCRIBED_METHODS:
+        tool = self.SUBSCRIBED_METHODS.get(method, method)
+        if tool not in self.SUBSCRIBED_METHODS.values():
             raise AdapterError(f"拒绝调用未订阅/未确认的吉客云 method: {method}")
-        resp = self._rpc("tools/call", {"name": method, "arguments": arguments}) or {}
+        resp = self._rpc("tools/call", {"name": tool, "arguments": arguments}) or {}
         return resp.get("result", {})
 
     # 以下同步方法在 Phase 1 拿到真实字段样本后逐个实现 mapping；

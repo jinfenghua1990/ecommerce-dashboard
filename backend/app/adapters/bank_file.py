@@ -23,7 +23,9 @@ def sha256_of(path: Path) -> str:
 
 
 def sanitize_name(name: str) -> str:
-    return SAFE_NAME.sub("_", name)[:180] or "unnamed"
+    clean = SAFE_NAME.sub("_", name.replace("..", "_"))
+    clean = clean.lstrip(".")[:180] or "unnamed"
+    return clean
 
 
 class BankFileAdapter:

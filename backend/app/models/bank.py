@@ -1,3 +1,4 @@
+from decimal import Decimal
 from datetime import date, datetime
 
 from sqlalchemy import BigInteger, Boolean, Date, DateTime, Numeric, String, Text, UniqueConstraint
@@ -18,7 +19,7 @@ class BankAccount(Base, PkMixin, TimestampMixin):
     account_name: Mapped[str] = mapped_column(String(256), default="")
     bank_name: Mapped[str] = mapped_column(String(256), default="")
     currency: Mapped[str] = mapped_column(String(8), default="CNY")
-    opening_balance: Mapped | None = mapped_column(MONEY, nullable=True)
+    opening_balance: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
 
 
 class BankImportBatch(Base, PkMixin, TimestampMixin):
@@ -41,7 +42,7 @@ class BankTransaction(Base, PkMixin, TimestampMixin):
     import_batch_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     txn_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     direction: Mapped[str] = mapped_column(String(8), default="in")  # in/out
-    amount: Mapped | None = mapped_column(MONEY, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     counterparty_name: Mapped[str] = mapped_column(String(256), default="", index=True)
     counterparty_account: Mapped[str] = mapped_column(String(128), default="")
     summary: Mapped[str] = mapped_column(Text, default="")
