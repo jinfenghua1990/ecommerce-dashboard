@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from app.services.purchase_service import derive_invoice_status, validate_transition
 
 

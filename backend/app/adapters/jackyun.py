@@ -241,7 +241,7 @@ class JackyunAdapter:
         return []
 
     def sync_products(self) -> None:
-        from app.models.catalog import Product, ProductSku
+        from app.models.catalog import Product
 
         def _upsert(db: Session, rec: dict) -> bool:
             gid = str(rec.get("goods_id") or rec.get("goodsId") or rec.get("goodsno") or "")
@@ -341,8 +341,7 @@ class JackyunAdapter:
         )
 
     def sync_inventory(self) -> None:
-        from app.models.catalog import InventorySnapshot
-        from app.models.catalog import ProductSku
+        from app.models.catalog import InventorySnapshot, ProductSku
         from datetime import datetime, timezone
 
         def _upsert(db: Session, rec: dict) -> bool:

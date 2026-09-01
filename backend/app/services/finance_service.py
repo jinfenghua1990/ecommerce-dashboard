@@ -283,17 +283,24 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
 
 
 def delivery_logs(db: Session, company: str | None = None) -> list[dict[str, Any]]:
-    from app.models.finance import EmailDeliveryLog
+    from app.models.finance import EmailDeliveryLog, MonthlyFinancePeriod
 
     q = db.query(EmailDeliveryLog).order_by(EmailDeliveryLog.id.desc()).limit(200)
     out = []
     for r in q.all():
         pkg = db.get(FinanceDeliveryPackage, r.package_id) if r.package_id else None
+        period_label = None
+        version = None
+        if pkg:
+            period = db.get(MonthlyFinancePeriod, pkg.period_id) if pkg.period_id else None
+            if period:
+                period_label = f"{period.period_year}-{period.period_month:02d}"
+            version = pkg.version
         out.append({
             "id": r.id, "packageId": r.package_id, "kind": r.kind,
             "toAddrs": r.to_addrs or [], "ccAddrs": r.cc_addrs or [],
             "status": r.status, "messageId": r.message_id, "error": r.error,
             "createdAt": r.created_at.isoformat() if r.created_at else None,
-            "period": None,
+            "period": period_label, "version": version,
         })
     return out

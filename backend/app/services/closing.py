@@ -12,8 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import audit
 from app.models.finance import ClosingVersion
-from app.models.payment import ReceivableSnapshot
-from app.models.profit import ProfitSnapshot
 from app.services import dashboard, profit as profit_service
 from app.services import reconciliation as rc
 
