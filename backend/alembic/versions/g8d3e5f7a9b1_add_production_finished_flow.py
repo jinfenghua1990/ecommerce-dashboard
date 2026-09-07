@@ -104,8 +104,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.UniqueConstraint(
-            "production_order_item_id", "inbound_item_id",
-            name="uq_production_inbound_item_allocation",
+            "request_key", "production_order_item_id", "inbound_item_id",
+            name="uq_production_inbound_allocation_request",
         ),
         sa.CheckConstraint("quantity > 0", name="ck_production_inbound_allocation_qty"),
     )
