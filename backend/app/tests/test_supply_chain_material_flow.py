@@ -5,7 +5,7 @@ import pytest
 
 from app.models.catalog import ProductSku
 from app.models.consumable import Consumable, ConsumableSkuMapping
-from app.services.production_material_flow_service import dispatch_materials, receive_materials
+from app.services.production_material_flow_service import consume_materials, dispatch_materials, receive_materials
 from app.services.production_service import cancel_production_order, create_production_order, production_order_detail
 
 
@@ -57,7 +57,7 @@ def _order(db_session):
     return order, material, reservation_id
 
 
-def test_material_dispatch_and_factory_receive_move_real_stock(db_session):
+def test_material_dispatch_receive_and_factory_consume_move_correct_stock(db_session):
     order, material, reservation_id = _order(db_session)
 
     dispatch_materials(
@@ -79,44 +79,73 @@ def test_material_dispatch_and_factory_receive_move_real_stock(db_session):
     assert reservation["dispatchedQty"] == "30.0000"
     assert reservation["factoryReceivedQty"] == "0.0000"
 
-    dispatch_materials(
-        db_session,
-        order_id=order.id,
-        items=[{"reservation_id": reservation_id, "quantity": "20"}],
-        actor="pytest",
-        request_key=str(uuid4()),
-    )
-    db_session.refresh(material)
-    assert material.stock_qty == Decimal("50")
-    assert material.transit_qty == Decimal("50")
-
     receive_key = str(uuid4())
     receive_materials(
         db_session,
         order_id=order.id,
-        items=[{"reservation_id": reservation_id, "quantity": "10"}],
+        items=[{"reservation_id": reservation_id, "quantity": "20"}],
         actor="pytest",
         request_key=receive_key,
+    )
+    db_session.refresh(material)
+    assert material.stock_qty == Decimal("70")
+    assert material.transit_qty == Decimal("10")
+    assert material.factory_qty == Decimal("20")
+
+    # 同一个签收 request_key 重复提交必须幂等。
+    receive_materials(
+        db_session,
+        order_id=order.id,
+        items=[{"reservation_id": reservation_id, "quantity": "20"}],
+        actor="pytest",
+        request_key=receive_key,
+    )
+    db_session.refresh(material)
+    assert material.transit_qty == Decimal("10")
+    assert material.factory_qty == Decimal("20")
+
+    consume_key = str(uuid4())
+    consume_materials(
+        db_session,
+        order_id=order.id,
+        items=[{"reservation_id": reservation_id, "quantity": "7"}],
+        actor="pytest",
+        request_key=consume_key,
+        note="实际生产消耗",
     )
     db_session.refresh(material)
     detail = production_order_detail(db_session, order)
     reservation = detail["materials"][0]
-    assert material.stock_qty == Decimal("50")
-    assert material.transit_qty == Decimal("40")
-    assert material.factory_qty == Decimal("10")
-    assert reservation["factoryReceivedQty"] == "10.0000"
+    # 工厂实际消耗只能扣工厂库存，不能再误扣自有仓。
+    assert material.stock_qty == Decimal("70")
+    assert material.transit_qty == Decimal("10")
+    assert material.factory_qty == Decimal("13")
+    assert material.used_qty == Decimal("7")
+    assert reservation["factoryReceivedQty"] == "20.0000"
+    assert reservation["consumedQty"] == "7.0000"
 
-    # 同一个 request_key 重复提交必须幂等，不能再次减在途/加工厂库存。
-    receive_materials(
+    # 同一个消耗 request_key 重放不重复扣库存。
+    consume_materials(
         db_session,
         order_id=order.id,
-        items=[{"reservation_id": reservation_id, "quantity": "10"}],
+        items=[{"reservation_id": reservation_id, "quantity": "7"}],
         actor="pytest",
-        request_key=receive_key,
+        request_key=consume_key,
+        note="实际生产消耗",
     )
     db_session.refresh(material)
-    assert material.transit_qty == Decimal("40")
-    assert material.factory_qty == Decimal("10")
+    assert material.stock_qty == Decimal("70")
+    assert material.factory_qty == Decimal("13")
+    assert material.used_qty == Decimal("7")
+
+    with pytest.raises(ValueError, match="超过该生产单工厂可用耗材"):
+        consume_materials(
+            db_session,
+            order_id=order.id,
+            items=[{"reservation_id": reservation_id, "quantity": "14"}],
+            actor="pytest",
+            request_key=str(uuid4()),
+        )
 
 
 def test_material_flow_rejects_over_dispatch_over_receive_and_cancel_after_dispatch(db_session):
