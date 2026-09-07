@@ -18,7 +18,6 @@ from io import StringIO
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -142,8 +141,6 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
         total_amount = _decimal(_pick(raw, ALIASES["total_amount"]))
         tax_code = _pick(raw, ALIASES["tax_code"]).strip()
 
-        # 只有“该发票只有这一条官方明细”时，允许用同一官方发票表头金额兜回本明细；
-        # 多明细发票绝不按业务数据或平均数分摊。
         if invoice_record_counts[invoice.id] == 1:
             if amount is None:
                 amount = invoice.amount_excl_tax
