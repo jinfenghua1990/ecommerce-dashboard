@@ -53,10 +53,10 @@ class Settings(BaseSettings):
     JACKYUN_APP_KEY: str = ""
     JACKYUN_MCP_TOKEN: str = ""
     # 吉客云同步模式（beat 调度档位）：
-    #   auto   = 原高频表（~533 次/日，正式 key 用）
-    #   test   = 低频表（~161 次/日，适配 300 次/日测试配额）
-    #   manual = 关闭全部吉客云自动同步，仅手动触发（工作台按钮 / POST /automation/run/jackyun/{job_type}）
-    JACKYUN_SYNC_MODE: str = "auto"
+    #   manual = 默认。月度经营系统不主动拉取吉客云，仅在导入/月结/人工触发时更新。
+    #   test   = 低频验证模式，仅在排查连接问题时临时启用。
+    #   auto   = 高频运营模式，保留兼容但不是本项目默认经营口径。
+    JACKYUN_SYNC_MODE: str = "manual"
 
     # 1688 开放平台（Phase 4，未提供前显示未配置；OAuth 通道保留为浏览器直采的备用）
     ALIBABA_1688_APP_KEY: str = ""
@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     JKY_WEB_EXPORT_SPLIT_ROWS: int = 400_000
 
     # 吉客云销售订单三通道：Web → Windows RPA → OpenAPI/MCP。
-    # 顺序可通过 .env 调整；未配置或未验证的通道会自动跳过。
+    # 顺序可通过 .env 调整；manual 模式下不会被 beat 自动触发，仍可人工运行。
     JKY_ORDER_PROVIDER_PRIORITY: str = "jky_web,jky_rpa,jky_api"
     JKY_ORDER_SYNC_INTERVAL_MINUTES: int = 30
     JKY_ORDER_SYNC_OVERLAP_MINUTES: int = 30
