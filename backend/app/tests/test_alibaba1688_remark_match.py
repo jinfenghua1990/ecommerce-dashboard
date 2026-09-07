@@ -8,6 +8,7 @@ from app.models.jky_web import JkyWebStockinOrder
 from app.models.procurement_chain import ProcurementChainLink
 from app.services.alibaba1688_remark_match_service import (
     classify_remark_references,
+    extract_known_reference_numbers,
     extract_reference_numbers,
     run_verified_remark_match,
 )
@@ -22,6 +23,11 @@ def test_extract_remark_references_from_free_text():
     ]
 
 
+def test_extract_known_reference_does_not_require_fixed_prefix():
+    remark = "吉客云入库单号：JH-260908-001，后续以此单收货"
+    assert extract_known_reference_numbers(remark, ["JH260908001"]) == ["JH260908001"]
+
+
 def test_classify_references_requires_known_number():
     result = classify_remark_references(
         "入库单 RK202609040001，另一个 RK202609050003",
@@ -29,6 +35,15 @@ def test_classify_references_requires_known_number():
     )
     assert result["matched"] == ["rk202609040001"]
     assert result["unverified"] == ["RK202609050003"]
+
+
+def test_classify_references_accepts_known_nonstandard_number():
+    result = classify_remark_references(
+        "吉客云入库：JH-260908-001",
+        ["JH260908001"],
+    )
+    assert result["matched"] == ["JH260908001"]
+    assert result["unverified"] == []
 
 
 def test_verified_remark_match_creates_idempotent_confirmed_links(db_session):
@@ -106,3 +121,37 @@ def test_verified_remark_match_materializes_exact_jky_web_stockin(db_session):
     assert db_session.query(ProcurementChainLink).filter_by(
         order_id=order.id, target_id=document.id
     ).count() == 1
+
+
+def test_verified_remark_match_links_known_nonstandard_jky_number(db_session):
+    source = Alibaba1688FileImport(
+        original_name="nonstandard-remark-test.xlsx",
+        stored_path="nonstandard-remark-test",
+        sha256="c" * 64,
+        lifecycle="active",
+        row_count=1,
+        imported_order_count=1,
+    )
+    db_session.add(source)
+    db_session.flush()
+    order = Alibaba1688Order(
+        import_id=source.id,
+        external_order_id="REMARK-NONSTANDARD-1688",
+        order_remark="吉客云采购入库单号：JH-260908-001",
+        raw_payload={},
+    )
+    document = JackyunGoodsDocument(
+        document_type="inbound",
+        goodsdoc_no="JH260908001",
+        supplier_name="测试供应商",
+        raw={},
+    )
+    db_session.add_all([order, document])
+    db_session.flush()
+
+    result = run_verified_remark_match(db_session, actor="pytest")
+    assert result["linked"] == 1
+    link = db_session.query(ProcurementChainLink).filter_by(order_id=order.id).one()
+    assert link.target_id == document.id
+    assert link.match_method == "remark_exact"
+    assert link.confirmed is True
