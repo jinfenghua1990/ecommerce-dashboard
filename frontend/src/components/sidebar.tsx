@@ -12,6 +12,7 @@ const NAV: NavItem[] = [
   { href: "/sales", label: "销售", phase: 2 },
   { href: "/products", label: "商品档案", phase: 2 },
   { href: "/supply-chain", label: "供应链中心", phase: null, group: true },
+  { href: "/supply-chain/production", label: "生产订单", phase: null, nested: true },
   { href: "/purchase/workbench", label: "采购订单", phase: 3, nested: true },
   { href: "/products/inventory-goods", label: "正品库存", phase: null, nested: true },
   { href: "/products/inventory-consumables", label: "耗材管理", phase: null, nested: true },
