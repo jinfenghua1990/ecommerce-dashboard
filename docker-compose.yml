@@ -33,7 +33,9 @@ services:
       retries: 20
 
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     user: "${RUNTIME_UID:-1000}:${RUNTIME_GID:-1000}"
     env_file: .env
@@ -41,7 +43,10 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ecommerce}:${POSTGRES_PASSWORD:-ecommerce}@postgres:5432/${POSTGRES_DB:-ecommerce}
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /data
+      FRONTEND_OUT: /app/frontend/out
       HOME: /tmp
+    ports:
+      - "8000:8000"
     volumes:
       - ./data:/data
     depends_on:
@@ -87,20 +92,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-
-  frontend:
-    build: ./frontend
-    restart: unless-stopped
-    ports:
-      - "8000:3000"
-    depends_on:
-      api:
-        condition: service_started
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
 
 volumes:
   pgdata:
