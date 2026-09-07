@@ -47,9 +47,15 @@ jobs:
       - name: Migrate
         run: |
           cd backend && alembic upgrade head
-      - name: Lint supply-chain changes (blocking)
+      - name: Lint new domain changes (blocking)
         run: |
-          cd backend && python -m pyflakes app/api/v1/supply_chain.py app/services/production_service.py app/models/production.py
+          cd backend && python -m pyflakes \
+            app/api/v1/supply_chain.py \
+            app/services/production_service.py \
+            app/models/production.py \
+            app/api/v1/tax_accounting.py \
+            app/services/tax_accounting_service.py \
+            app/tests/test_tax_accounting_truth.py
       - name: Legacy lint report (non-blocking until existing debt is cleaned)
         continue-on-error: true
         run: |
