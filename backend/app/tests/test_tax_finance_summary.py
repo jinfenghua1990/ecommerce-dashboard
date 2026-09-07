@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.models.tax import TaxInvoice, TaxInvoiceImport, TaxInvoiceImportRecord
+from app.services import tax_category_rule_service
 from app.services.tax_finance_summary_service import build_finance_summary, to_finance_csv
 
 
@@ -136,7 +137,38 @@ def test_official_invoice_star_prefix_can_supply_broad_category(db_session):
     report = build_finance_summary(db_session, 2026, 8)
     assert report["readyForFinanceDelivery"] is True
     assert report["categories"][0]["accountingCategory"] == "软饮料"
-    assert report["details"][0]["goodsName"] == "*软饮料*咖啡饮料"
+    assert report["details"][0]["categorySource"] == "official_star_prefix"
+
+
+def test_user_maintained_rule_can_supply_category_when_official_category_missing(db_session):
+    keyword = f"测试咖啡{uuid4().hex[:8]}"
+    rule = tax_category_rule_service.create_rule(
+        db_session,
+        pattern="*软饮料*咖啡",
+        match_keyword=keyword,
+        match_mode="contains",
+        priority=1,
+        actor="pytest",
+    )
+    batch = _batch(db_session)
+    _invoice_detail(
+        db_session,
+        batch,
+        row_index=1,
+        goods_name=f"新品-{keyword}-礼盒",
+        category="",
+        tax_rate="13%",
+        quantity="10",
+        unit="盒",
+        amount="1000",
+        tax="130",
+    )
+
+    report = build_finance_summary(db_session, 2026, 8)
+    item = next(row for row in report["details"] if keyword in row["goodsName"])
+    assert item["accountingCategory"] == "软饮料"
+    assert item["categorySource"] == "user_rule"
+    assert item["categoryRuleId"] == rule.id
 
 
 def test_finance_summary_never_forces_mixed_units_into_one_quantity(db_session):
@@ -151,8 +183,7 @@ def test_finance_summary_never_forces_mixed_units_into_one_quantity(db_session):
     )
 
     report = build_finance_summary(db_session, 2026, 8)
-    row = report["categories"][0]
-    assert row["accountingCategory"] == "软饮料"
+    row = next(row for row in report["categories"] if row["accountingCategory"] == "软饮料" and row["taxRate"] == "13%")
     assert row["unit"] == "多单位"
     assert row["quantity"] is None
     assert row["quantityComplete"] is False
@@ -161,14 +192,41 @@ def test_finance_summary_never_forces_mixed_units_into_one_quantity(db_session):
 def test_missing_accounting_category_blocks_finance_delivery(db_session):
     batch = _batch(db_session)
     _invoice_detail(
-        db_session, batch, row_index=1, goods_name="未分类商品", category="",
+        db_session, batch, row_index=1, goods_name="绝对不会命中规则的未分类商品XYZ", category="",
         tax_rate="13%", quantity="10", unit="箱", amount="1000", tax="130",
     )
 
     report = build_finance_summary(db_session, 2026, 8)
     assert report["readyForFinanceDelivery"] is False
-    assert report["summary"]["blockerCount"] == 1
-    assert "禁止自动猜分类" in report["blockers"][0]["reasons"][0]
+    assert report["summary"]["blockerCount"] >= 1
+    blocker = next(row for row in report["blockers"] if "绝对不会命中规则" in row["goodsName"])
+    assert "未命中你维护的财务分类规则" in blocker["reasons"][0]
+
+
+def test_category_rule_api_can_add_and_modify(client):
+    suffix = uuid4().hex[:8]
+    create = client.post(
+        "/api/v1/tax-accounting/category-rules",
+        json={
+            "pattern": f"*软饮料*咖啡{suffix}",
+            "match_keyword": f"咖啡{suffix}",
+            "match_mode": "contains",
+            "priority": 20,
+            "enabled": True,
+        },
+    )
+    assert create.status_code == 200
+    row = create.json()
+    assert row["categoryName"] == "软饮料"
+    assert row["pattern"] == f"*软饮料*咖啡{suffix}"
+
+    update = client.patch(
+        f"/api/v1/tax-accounting/category-rules/{row['id']}",
+        json={"pattern": f"*软饮料*咖啡饮料{suffix}", "enabled": False},
+    )
+    assert update.status_code == 200
+    assert update.json()["pattern"] == f"*软饮料*咖啡饮料{suffix}"
+    assert update.json()["enabled"] is False
 
 
 def test_tax_original_detail_delete_endpoint_is_blocked(client):
