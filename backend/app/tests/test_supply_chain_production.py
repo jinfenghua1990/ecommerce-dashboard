@@ -28,7 +28,7 @@ def _consumable(db_session, suffix: str, stock: str) -> Consumable:
     row = Consumable(
         code=f"PYTEST-HC-{suffix}-{uuid4().hex[:8]}",
         name=f"测试耗材 {suffix}",
-        consumable_type="box",
+        category="彩盒",
         unit="个",
         stock_qty=Decimal(stock),
         factory_qty=Decimal("0"),
