@@ -127,7 +127,7 @@ jobs:
           cd backend && python -m pytest app/tests -q --tb=short
       - name: Pyflakes debt budget (blocking)
         run: |
-          bash scripts/pyflakes-budget.sh 17
+          bash scripts/pyflakes-budget.sh 15
 
   frontend:
     name: Frontend (typecheck + static build)
