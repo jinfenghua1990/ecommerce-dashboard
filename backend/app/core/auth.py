@@ -15,7 +15,9 @@ import time
 
 from app.config import settings
 
-_PBKDF2_ITERATIONS = 120_000
+# OWASP 当前对 PBKDF2-HMAC-SHA256 的建议工作因子为 600,000。
+# 迭代次数写在每条 hash 中，因此旧 120,000 次密码仍可验证，并可在成功登录时平滑升级。
+_PBKDF2_ITERATIONS = 600_000
 _TOKEN_TTL_SECONDS = 12 * 3600  # 12 小时，过期重新登录
 
 
@@ -40,6 +42,17 @@ def verify_password(plain: str, stored: str | None) -> bool:
         return hmac.compare_digest(dk.hex(), dk_hex)
     except (ValueError, TypeError):
         return False
+
+
+def password_needs_rehash(stored: str | None) -> bool:
+    """旧工作因子在成功登录后升级；格式异常由 verify_password 先行拒绝。"""
+    if not stored:
+        return True
+    try:
+        algo, iterations, _salt_hex, _dk_hex = stored.split("$")
+        return algo != "pbkdf2_sha256" or int(iterations) < _PBKDF2_ITERATIONS
+    except (ValueError, TypeError):
+        return True
 
 
 # ---------- 令牌 ----------
