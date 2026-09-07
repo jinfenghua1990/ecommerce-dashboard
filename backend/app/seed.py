@@ -21,7 +21,7 @@ BUILTIN_ROLES = [
 
 
 def ensure_seed(db) -> dict:
-    result: dict = {"adminCreated": False, "passwordSet": False}
+    result: dict = {"adminCreated": False, "passwordSet": False, "rulesSeeded": False}
 
     for code, name in BUILTIN_ROLES:
         if db.scalar(select(Role).where(Role.code == code)) is None:
@@ -58,9 +58,14 @@ def ensure_seed(db) -> dict:
             settings.FORCE_ADMIN_PASSWORD or not admin.hashed_password
         ):
             admin.hashed_password = hash_password(settings.ADMIN_PASSWORD)
+            admin.token_version += 1
             result["passwordSet"] = True
 
     db.commit()
+    # 默认对方户名规则是系统初始数据，不能在 GET /rules、GET /suggestions 中懒写入。
+    from app.services.reconciliation import seed_rules_if_empty
+
+    result["rulesSeeded"] = seed_rules_if_empty(db)
     return result
 
 

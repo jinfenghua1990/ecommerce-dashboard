@@ -12,7 +12,7 @@ celery_app = Celery(
     "ecommerce_ops",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.sync"],
+    include=["app.tasks.sync", "app.tasks.recycle_bin"],
 )
 
 # 死信队列：Redis 无原生 DLX，用 task_failure 信号把「最终失败」落 Redis list。
@@ -64,12 +64,81 @@ celery_app.conf.update(
     # 全局退避兜底：单任务未显式写 countdown 时按 2^n 退避，封顶 600s
     task_retry_backoff=True,
     task_retry_backoff_max=600,
-    beat_schedule={
-        # 吉客云：订单/售后 15 分钟
-        "jackyun-sales-15min": {
+)
+
+
+def _jackyun_schedules() -> dict:
+    """吉客云 beat 表（按 JACKYUN_SYNC_MODE 三档切换）。
+
+    - auto   = 原高频表 ~533 次/日（15/30/60 分钟节奏，正式 key 用）。
+    - test   = 低频表 ~161 次/日：订单/售后类每小时、库存与采购类每 2 小时，留 ~45% 余量给重试与手动触发。
+    - manual = 返回空表：关闭全部吉客云自动同步，仅工作台按钮 / POST /automation/run/jackyun/{job_type} 手动触发。
+    每档错峰分钟，避免同一分钟并发打 MCP。
+    """
+    if settings.JACKYUN_SYNC_MODE == "manual":
+        return {}
+    if settings.JACKYUN_SYNC_MODE == "test":
+        return {
+            # 销售订单统一三通道：每小时（错峰）
+            "jky-orders-hourly": {
+                "task": "tasks.sync_jky_orders",
+                "schedule": crontab(minute=3),
+            },
+            "jackyun-aftersales-hourly": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=13),
+                "args": ("aftersales",),
+            },
+            "jackyun-online-orders-hourly": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=23),
+                "args": ("online_orders",),
+            },
+            "jackyun-shop-orders-hourly": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=33),
+                "args": ("shop_orders",),
+            },
+            # 库存：每 2 小时 → 12
+            "jackyun-inventory-2h": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=43, hour="*/2"),
+                "args": ("inventory",),
+            },
+            # 采购类：每 2 小时错峰 → 4 × 12 = 48
+            "jackyun-purchase-2h": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=5, hour="1-23/2"),
+                "args": ("purchase",),
+            },
+            "jackyun-purchase-settlements-2h": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=15, hour="1-23/2"),
+                "args": ("purchase_settlements",),
+            },
+            "jackyun-purchase-returns-2h": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=25, hour="1-23/2"),
+                "args": ("purchase_returns",),
+            },
+            "jackyun-stock-allocations-2h": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(minute=35, hour="1-23/2"),
+                "args": ("stock_allocations",),
+            },
+        }
+    interval = max(1, min(settings.JKY_ORDER_SYNC_INTERVAL_MINUTES, 59))
+    return {
+        # 吉客云销售订单统一三通道，默认每 30 分钟
+        "jky-orders-interval": {
+            "task": "tasks.sync_jky_orders",
+            "schedule": crontab(minute=f"*/{interval}"),
+        },
+        # 吉客云：售后 15 分钟（错峰）
+        "jackyun-aftersales-15min": {
             "task": "tasks.sync_jackyun",
-            "schedule": crontab(minute="*/15"),
-            "args": ("sales",),
+            "schedule": crontab(minute="7,22,37,52"),
+            "args": ("aftersales",),
         },
         # 吉客云：库存 30 分钟
         "jackyun-inventory-30min": {
@@ -77,17 +146,86 @@ celery_app.conf.update(
             "schedule": crontab(minute="*/30"),
             "args": ("inventory",),
         },
-        # 吉客云：商品/SKU 每天 03:10
-        "jackyun-products-daily": {
+        "jackyun-online-orders-15min": {
             "task": "tasks.sync_jackyun",
-            "schedule": crontab(hour=3, minute=10),
-            "args": ("products",),
+            "schedule": crontab(minute="2,17,32,47"),
+            "args": ("online_orders",),
+        },
+        "jackyun-shop-orders-15min": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(minute="4,19,34,49"),
+            "args": ("shop_orders",),
         },
         # 吉客云：采购 60 分钟
         "jackyun-purchase-hourly": {
             "task": "tasks.sync_jackyun",
             "schedule": crontab(minute=5),
             "args": ("purchase",),
+        },
+        "jackyun-purchase-settlements-hourly": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(minute=15),
+            "args": ("purchase_settlements",),
+        },
+        "jackyun-purchase-returns-hourly": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(minute=25),
+            "args": ("purchase_returns",),
+        },
+        "jackyun-stock-allocations-hourly": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(minute=35),
+            "args": ("stock_allocations",),
+        },
+    }
+
+
+def _beat_schedule() -> dict:
+    sched: dict = {}
+    # manual 模式：吉客云全部自动同步关闭（含每日低频任务），仅保留非吉客云任务
+    if settings.JACKYUN_SYNC_MODE != "manual":
+        sched.update(_jackyun_schedules())
+        sched.update({
+            # 以下为每天/低频任务，各模式共用
+            # 吉客云：商品/SKU 每天 03:10
+            "jackyun-products-daily": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(hour=3, minute=10),
+            "args": ("products",),
+        },
+        # 吉客云：SKU/价格主档（商品之后）
+        "jackyun-price-lists-daily": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(hour=3, minute=20),
+            "args": ("price_lists",),
+        },
+        "jackyun-warehouses-daily": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(hour=3, minute=30),
+            "args": ("warehouses",),
+        },
+        "jackyun-inbound-daily": {
+            "task": "tasks.sync_jackyun",
+            "schedule": crontab(hour=3, minute=40),
+            "args": ("inbound",),
+        },
+            "jackyun-outbound-daily": {
+                "task": "tasks.sync_jackyun",
+                "schedule": crontab(hour=3, minute=50),
+                "args": ("outbound",),
+            },
+        })
+    # 非吉客云任务始终保留
+    sched.update({
+        # 数据中心导入回收站：每天 04:15 清理超过保留期（默认 30 天）的软删除导入
+        "recycle-bin-purge-daily": {
+            "task": "tasks.recycle_bin_purge",
+            "schedule": crontab(hour=4, minute=15),
+        },
+        # 吉客云 Web Adapter：每天 03:30 一次（销售/采购入库/库存全流程）
+        "jky-web-daily": {
+            "task": "tasks.sync_jky_web",
+            "schedule": crontab(hour=3, minute=30),
         },
         # 1688：每天 07:30 一次
         "alibaba1688-daily": {
@@ -99,5 +237,14 @@ celery_app.conf.update(
             "task": "tasks.monthly_verify",
             "schedule": crontab(hour=6, minute=0, day_of_month=1),
         },
-    },
-)
+        # 销售出库报表：每月 2 日 04:10 生成上月 CSV 并归档进财务资料中心（错峰 daily outbound 03:50）
+        "sales-outbound-monthly": {
+            "task": "tasks.generate_monthly_sales_outbound",
+            "schedule": crontab(hour=4, minute=10, day_of_month=2),
+        },
+    })
+    return sched
+
+
+# beat_schedule 依赖 JACKYUN_TEST_MODE 分支，需在函数定义之后赋值
+celery_app.conf.beat_schedule = _beat_schedule()

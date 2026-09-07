@@ -2,7 +2,7 @@
 
 约定：
 - 全局唯一 stdout handler，时间戳按 ISO8601 UTC；
-- 第三方日志（uvicorn/sqlalchemy）接管，level 与 root 一致；
+- Uvicorn 复用 root handler；SQL 参数在生产环境只记录 warning；
 - 业务代码 `from app.core.logging import get_logger` 后用 `log.info(...)` 等；
 - 故意静默吞错的健康检查代码用 warning 级别记录，不再裸 except 后 pass。
 """
@@ -26,9 +26,11 @@ def configure_logging(level: str = "INFO") -> None:
         root.addHandler(handler)
         _CONFIGURED = True
     root.setLevel(level.upper())
-    # uvicorn 默认 propagates=True，复用 root handler
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "sqlalchemy.engine"):
+    # uvicorn 默认 propagates=True，复用 root handler。SQL 参数可能含业务/身份数据，
+    # 线上仅保留 warning，避免每个查询和绑定值写入容器日志。
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).setLevel(level.upper())
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

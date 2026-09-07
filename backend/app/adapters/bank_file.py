@@ -2,6 +2,7 @@ import hashlib
 import io
 import re
 from datetime import datetime, date
+from decimal import Decimal
 from pathlib import Path
 
 from app.config import settings
@@ -94,7 +95,7 @@ def _normalize(rec: dict) -> dict:
         if v is None:
             return None
         if isinstance(v, (int, float)):
-            return f"{v:.2f}"
+            return f"{Decimal(str(v)).quantize(Decimal('0.01')):f}"
         s = str(v).replace(",", "").replace("¥", "").replace(" ", "")
         if not s or s in ("-", "--"):
             return None
@@ -142,7 +143,7 @@ def sanitize_name(name: str) -> str:
 class BankFileAdapter:
     provider = "zhejiang_rural_credit"
 
-    ALLOWED_EXT = {".xlsx", ".xls", ".pdf", ".zip"}
+    ALLOWED_EXT = {".xlsx", ".pdf", ".zip"}
 
     def save_original(
         self,
@@ -156,6 +157,12 @@ class BankFileAdapter:
         ext = Path(original_name).suffix.lower()
         if ext not in self.ALLOWED_EXT:
             raise ValueError(f"不支持的文件类型: {ext}（允许 XLSX/PDF/ZIP）")
+        if not (1900 <= period_year <= 2999 and 1 <= period_month <= 12):
+            raise ValueError("非法账期")
+        if not content:
+            raise ValueError("空文件")
+        if len(content) > settings.MAX_UPLOAD_BYTES:
+            raise ValueError(f"文件超过单文件大小上限（{settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MiB）")
 
         base_dir = (
             Path(settings.DATA_DIR) / "finance" / sanitize_name(company)
@@ -166,11 +173,15 @@ class BankFileAdapter:
         clean = sanitize_name(original_name)
         # 同名不覆盖：version 递增
         version = 1
-        target = base_dir / f"{Path(clean).stem}.v{version}{Path(clean).suffix}"
-        while target.exists():
-            version += 1
+        while True:
             target = base_dir / f"{Path(clean).stem}.v{version}{Path(clean).suffix}"
-        target.write_bytes(content)
+            try:
+                with target.open("xb") as output:
+                    output.write(content)
+                break
+            except FileExistsError:
+                # 使用排他创建而非 exists()+write，避免并发覆盖同名原件。
+                version += 1
 
         return {
             "stored_path": str(target),

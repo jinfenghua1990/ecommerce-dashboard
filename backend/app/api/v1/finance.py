@@ -1,12 +1,14 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import current_actor
 from app.db import get_db
 from app.services import finance_service
+from app.utils.uploads import UploadTooLargeError, read_upload_limited
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -18,6 +20,7 @@ def list_periods(company: str | None = None, db: Session = Depends(get_db)) -> l
 
 @router.post("/files")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     period_year: int = Form(...),
     period_month: int = Form(...),
@@ -26,20 +29,22 @@ async def upload_file(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """原始资料上传：SHA256 + 版本化归档，同名不覆盖。"""
-    content = await file.read()
     try:
+        content = await read_upload_limited(file, max_bytes=finance_service.settings.MAX_UPLOAD_BYTES)
         row = finance_service.store_upload(
             db,
             company=company or finance_service.DEFAULT_COMPANY,
             year=period_year, month=period_month,
             category=category, original_name=file.filename or "unnamed",
-            content=content,
+            content=content, actor=current_actor(request),
         )
+    except UploadTooLargeError as exc:
+        raise HTTPException(413, str(exc))
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc))
     return {
         "id": row.id, "version": row.version, "sha256": row.sha256,
-        "storedPath": row.stored_path, "size": row.size,
+        "size": row.size,
     }
 
 
@@ -47,10 +52,10 @@ async def upload_file(
 def list_files(year: int, month: int, company: str = "", db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     from app.models.finance import ArchiveFile
 
-    if month < 1 or month > 12:
-        raise HTTPException(status_code=422, detail=f"month 必须在 1..12，给定 {month}")
-    if year < 1900 or year > 2999:
-        raise HTTPException(status_code=422, detail=f"year 不在合理范围内，给定 {year}")
+    try:
+        finance_service.validate_period(year, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     q = db.query(ArchiveFile).filter_by(period_year=year, period_month=month)
     if company:
@@ -66,6 +71,27 @@ def list_files(year: int, month: int, company: str = "", db: Session = Depends(g
     ]
 
 
+@router.get("/files/{file_id}/download")
+def download_file(file_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    """单文件下载：财务核对原始资料用（归档原文，未改动）。"""
+    from pathlib import Path
+
+    from app.models.finance import ArchiveFile
+
+    row = db.get(ArchiveFile, file_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="归档文件不存在")
+    path = Path(row.stored_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="归档文件在存储中缺失，请联系管理员核对")
+    return FileResponse(
+        path,
+        filename=row.original_name,
+        media_type=row.mime or "application/octet-stream",
+        headers={"X-Archive-SHA256": row.sha256},
+    )
+
+
 @router.post("/{year}/{month}/check")
 def check_period(year: int, month: int, company: str = "", db: Session = Depends(get_db)) -> dict[str, Any]:
     period = finance_service.refresh_period_status(
@@ -75,16 +101,18 @@ def check_period(year: int, month: int, company: str = "", db: Session = Depends
 
 
 @router.post("/{year}/{month}/package")
-def package_period(year: int, month: int, company: str = "", db: Session = Depends(get_db)) -> dict[str, Any]:
+def package_period(year: int, month: int, request: Request, company: str = "",
+                   db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         pkg = finance_service.package_period(
-            db, company or finance_service.DEFAULT_COMPANY, year, month
+            db, company or finance_service.DEFAULT_COMPANY, year, month,
+            actor=current_actor(request),
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc))
     return {
         "id": pkg.id, "version": pkg.version, "status": pkg.status,
-        "zipPath": pkg.zip_path, "sha256": pkg.zip_sha256,
+        "sha256": pkg.zip_sha256,
     }
 
 
@@ -95,23 +123,23 @@ def download_package(pkg_id: int, db: Session = Depends(get_db)) -> FileResponse
     pkg = db.get(FinanceDeliveryPackage, pkg_id)
     if not pkg:
         raise HTTPException(404, "交付包不存在")
-    import os
-
-    if not os.path.exists(pkg.zip_path):
-        raise HTTPException(410, "ZIP 文件缺失（存储被移动或删除）")
-    return FileResponse(pkg.zip_path, media_type="application/zip",
-                        filename=pkg.zip_path.split("/")[-1])
+    try:
+        zip_path = finance_service.managed_data_file(pkg.zip_path, label="ZIP 文件")
+    except RuntimeError as exc:
+        raise HTTPException(410, str(exc))
+    return FileResponse(str(zip_path), media_type="application/zip", filename=zip_path.name)
 
 
 class SendBody(BaseModel):
     version: int | None = None
-    to_addrs: list[str] = []
-    cc_addrs: list[str] = []
+    to_addrs: list[str] = Field(default_factory=list)
+    cc_addrs: list[str] = Field(default_factory=list)
     company: str = ""
 
 
 @router.post("/{year}/{month}/send")
-def send(year: int, month: int, body: SendBody, db: Session = Depends(get_db)) -> dict[str, Any]:
+def send(year: int, month: int, body: SendBody, request: Request,
+         db: Session = Depends(get_db)) -> dict[str, Any]:
     """发送财务交付包：SMTP 未配置如实失败；已发 V1 重发标记 RESENT（规格 16）。"""
     from app.adapters.base import AdapterNotConfigured
 
@@ -119,6 +147,7 @@ def send(year: int, month: int, body: SendBody, db: Session = Depends(get_db)) -
         result = finance_service.send_delivery(
             db, body.company or finance_service.DEFAULT_COMPANY, year, month,
             version=body.version, to_addrs=body.to_addrs or None, cc_addrs=body.cc_addrs or None,
+            actor=current_actor(request),
         )
     except AdapterNotConfigured as exc:
         raise HTTPException(400, str(exc))

@@ -1,16 +1,18 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
-  async rewrites() {
+  // 静态导出：前端由 FastAPI 在 8000 同口托管，无需独立 next start 进程
+  output: "export",
+  poweredByHeader: false,
+  async headers() {
     return [
-      // 健康探针：对外暴露 api 的 /healthz，供 8888 聚合中心读取真实健康度
       {
-        source: "/healthz",
-        destination: "http://api:8000/healthz",
-      },
-      {
-        source: "/api/:path*",
-        destination: "http://api:8000/api/:path*",
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Permissions-Policy", value: "camera=(), geolocation=(), microphone=()" },
+        ],
       },
     ];
   },

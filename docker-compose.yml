@@ -35,11 +35,13 @@ services:
   api:
     build: ./backend
     restart: unless-stopped
+    user: "${RUNTIME_UID:-1000}:${RUNTIME_GID:-1000}"
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ecommerce}:${POSTGRES_PASSWORD:-ecommerce}@postgres:5432/${POSTGRES_DB:-ecommerce}
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /data
+      HOME: /tmp
     volumes:
       - ./data:/data
     depends_on:
@@ -56,12 +58,14 @@ services:
   worker:
     build: ./backend
     restart: unless-stopped
+    user: "${RUNTIME_UID:-1000}:${RUNTIME_GID:-1000}"
     command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "2"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ecommerce}:${POSTGRES_PASSWORD:-ecommerce}@postgres:5432/${POSTGRES_DB:-ecommerce}
       REDIS_URL: redis://redis:6379/0
       DATA_DIR: /data
+      HOME: /tmp
     volumes:
       - ./data:/data
     depends_on:
@@ -73,11 +77,13 @@ services:
   beat:
     build: ./backend
     restart: unless-stopped
-    command: ["celery", "-A", "app.celery_app", "beat", "-l", "info"]
+    user: "${RUNTIME_UID:-1000}:${RUNTIME_GID:-1000}"
+    command: ["celery", "-A", "app.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ecommerce}:${POSTGRES_PASSWORD:-ecommerce}@postgres:5432/${POSTGRES_DB:-ecommerce}
       REDIS_URL: redis://redis:6379/0
+      HOME: /tmp
     depends_on:
       redis:
         condition: service_healthy
@@ -86,7 +92,7 @@ services:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "18080:3000"
+      - "8000:3000"
     depends_on:
       api:
         condition: service_started

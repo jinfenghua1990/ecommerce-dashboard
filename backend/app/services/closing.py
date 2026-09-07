@@ -58,7 +58,7 @@ def list_versions(db: Session, year: int | None = None, month: int | None = None
 
 
 def create_snapshot(db: Session, year: int, month: int, formula_version: str = "v1",
-                    actor: str = "lan_user") -> ClosingVersion:
+                    actor: str = "system") -> ClosingVersion:
     """月结：计算 → 落 V{n+1} → 标记 current。已发送版本不覆盖，只追加。"""
     if not (1 <= month <= 12):
         raise ValueError("非法月份")
@@ -85,6 +85,6 @@ def create_snapshot(db: Session, year: int, month: int, formula_version: str = "
     return row
 
 
-def recalc(db: Session, year: int, month: int, actor: str = "lan_user") -> ClosingVersion:
+def recalc(db: Session, year: int, month: int, actor: str = "system") -> ClosingVersion:
     """重新计算某月：V1 保留，产生 V{n+1}（规格 1.6）。"""
     return create_snapshot(db, year, month, formula_version="v1", actor=actor)

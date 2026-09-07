@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String, Text
+from sqlalchemy import BigInteger, DateTime, Index, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,8 +12,16 @@ MONEY = Numeric(18, 4)
 
 class SalesOrder(Base, PkMixin, TimestampMixin):
     __tablename__ = "sales_orders"
+    __table_args__ = (
+        Index("ix_sales_orders_identity_keys_gin", "identity_keys", postgresql_using="gin"),
+    )
 
     order_no: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    # 吉客云三通道统一订单入口写入；旧订单使用 legacy，避免伪造来源。
+    source_provider: Mapped[str] = mapped_column(String(32), default="legacy", index=True)
+    source_order_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    identity_keys: Mapped[list] = mapped_column(JSONB, default=list)
+    source_history: Mapped[list] = mapped_column(JSONB, default=list)
     store_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     platform: Mapped[str] = mapped_column(String(64), default="", index=True)
     order_type: Mapped[str] = mapped_column(String(64), default="")

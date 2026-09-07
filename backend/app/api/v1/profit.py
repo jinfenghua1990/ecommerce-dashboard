@@ -1,9 +1,10 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.deps import current_actor
 from app.db import get_db
 from app.services import profit as ps
 
@@ -33,13 +34,14 @@ def list_costs(period_year: int | None = None, period_month: int | None = None,
 
 
 @router.post("/costs")
-def upsert_cost(body: CostBody, db: Session = Depends(get_db)) -> dict[str, Any]:
+def upsert_cost(body: CostBody, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         row = ps.upsert_cost(
             db, sku_id=body.sku_id, period_year=body.period_year, period_month=body.period_month,
             actual_cost=body.actual_cost, purch_order_cost=body.purch_order_cost,
             default_cost=body.default_cost, estimated_cost=body.estimated_cost,
             source=body.source,
+            actor=current_actor(request),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc))
@@ -48,4 +50,7 @@ def upsert_cost(body: CostBody, db: Session = Depends(get_db)) -> dict[str, Any]
 
 @router.get("/compute")
 def compute(period_year: int, period_month: int, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return ps.compute(db, period_year, period_month)
+    try:
+        return ps.compute(db, period_year, period_month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))

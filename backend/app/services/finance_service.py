@@ -31,7 +31,34 @@ CATEGORIES = ("bank", "jackyun", "invoice", "other")
 DEFAULT_REQUIRED = {"bank": 1, "invoice": 0, "jackyun": 0, "other": 0}
 
 
+def validate_period(year: int, month: int) -> None:
+    """统一约束账期，避免异常年份进入文件路径或数据库。"""
+    if not (1900 <= year <= 2999):
+        raise ValueError(f"year 不在合理范围内，给定 {year}")
+    if not (1 <= month <= 12):
+        raise ValueError("非法月份")
+
+
+def managed_data_file(path: str | Path, *, label: str) -> Path:
+    """仅允许读取 DATA_DIR 内真实存在的普通文件，拒绝越界路径和外链符号链接。"""
+    root = Path(settings.DATA_DIR).resolve()
+    try:
+        resolved = Path(path).resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{label}缺失（存储被移动或删除）") from exc
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise RuntimeError(f"{label}不在受管数据目录内")
+    return resolved
+
+
+def _write_new_file(target: Path, content: bytes) -> None:
+    """用 O_EXCL 语义创建文件，两个并发上传绝不会覆盖彼此。"""
+    with target.open("xb") as output:
+        output.write(content)
+
+
 def get_or_create_period(db: Session, company: str, year: int, month: int) -> MonthlyFinancePeriod:
+    validate_period(year, month)
     row = (
         db.query(MonthlyFinancePeriod)
         .filter_by(company=company, period_year=year, period_month=month)
@@ -90,15 +117,17 @@ def store_upload(
     category: str,
     original_name: str,
     content: bytes,
-    actor: str = "lan_user",
+    actor: str = "system",
 ) -> ArchiveFile:
+    validate_period(year, month)
     if category not in CATEGORIES:
         raise ValueError(f"非法资料类别: {category}")
-    if not (1 <= month <= 12):
-        raise ValueError("非法月份")
     if not content:
         raise ValueError("空文件")
+    if len(content) > settings.MAX_UPLOAD_BYTES:
+        raise ValueError(f"文件超过单文件大小上限（{settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MiB）")
 
+    original_name = original_name or "unnamed"
     version = next_version(db, company, year, month, category, original_name)
     base_dir = (
         Path(settings.DATA_DIR) / "finance" / sanitize_name(company)
@@ -106,33 +135,51 @@ def store_upload(
     )
     base_dir.mkdir(parents=True, exist_ok=True)
     clean = sanitize_name(original_name)
-    target = base_dir / f"{Path(clean).stem}.v{version}{Path(clean).suffix}"
-    if target.exists():  # 双保险：磁盘层面也拒绝覆盖
-        raise RuntimeError(f"目标文件已存在，拒绝覆盖: {target}")
-    target.write_bytes(content)
+    while True:
+        target = base_dir / f"{Path(clean).stem}.v{version}{Path(clean).suffix}"
+        try:
+            _write_new_file(target, content)
+            break
+        except FileExistsError:
+            # 另一个并发上传可能刚写入相同版本；保留原件并尝试下一个版本。
+            version += 1
 
-    mime = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
-    row = ArchiveFile(
-        company=company, category=category, original_name=original_name,
-        stored_path=str(target), size=len(content), mime=mime,
-        sha256=sha256_of(target), period_year=year, period_month=month,
-        version=version, uploader=actor, uploaded_at=datetime.now(timezone.utc),
-    )
-    db.add(row)
-    db.commit()
+    try:
+        mime = mimetypes.guess_type(original_name)[0] or "application/octet-stream"
+        row = ArchiveFile(
+            company=company, category=category, original_name=original_name,
+            stored_path=str(target), size=len(content), mime=mime,
+            sha256=sha256_of(target), period_year=year, period_month=month,
+            version=version, uploader=actor, uploaded_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+        # 仅删除本次用排他方式创建的文件；绝不碰已有版本。
+        target.unlink(missing_ok=True)
+        raise
     audit(db, actor, "finance.file.upload", "archive_files", row.id,
           {"category": category, "period": f"{year}-{month:02d}", "version": version, "sha256": row.sha256[:16]})
     refresh_period_status(db, company, year, month)
     return row
 
 
-def package_period(db: Session, company: str, year: int, month: int, actor: str = "lan_user") -> FinanceDeliveryPackage:
+def package_period(db: Session, company: str, year: int, month: int,
+                   actor: str = "system") -> FinanceDeliveryPackage:
     """资料齐全才可打包；每次打包生成新版本号，ZIP 落 output/V{n}，绝不覆盖。"""
+    validate_period(year, month)
     period = get_or_create_period(db, company, year, month)
     files = db.query(ArchiveFile).filter_by(company=company, period_year=year, period_month=month).all()
     status, summary = evaluate_completeness(files, period.required_types or DEFAULT_REQUIRED)
     if status != "READY" or not files:
         raise ValueError(f"资料不完整，禁止打包，缺少: {summary['missing']}")
+
+    # 归档表的 stored_path 也属于不可信持久化数据：打包前再次做目录边界校验。
+    source_files = [
+        (f, managed_data_file(f.stored_path, label="原始归档文件"))
+        for f in files
+    ]
 
     prev = (
         db.query(func.max(FinanceDeliveryPackage.version))
@@ -140,30 +187,44 @@ def package_period(db: Session, company: str, year: int, month: int, actor: str 
         .scalar()
     )
     version = (prev or 0) + 1
-    out_dir = (
-        Path(settings.DATA_DIR) / "finance" / sanitize_name(company)
-        / f"{year:04d}" / f"{month:02d}" / "output" / f"V{version}"
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"finance_{sanitize_name(company)}_{year:04d}{month:02d}_V{version}.zip"
-    if zip_path.exists():
-        raise RuntimeError(f"ZIP 已存在，禁止覆盖: {zip_path}")
+    zip_path: Path | None = None
+    created_zip = False
+    while True:
+        out_dir = (
+            Path(settings.DATA_DIR) / "finance" / sanitize_name(company)
+            / f"{year:04d}" / f"{month:02d}" / "output" / f"V{version}"
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        candidate = out_dir / f"finance_{sanitize_name(company)}_{year:04d}{month:02d}_V{version}.zip"
+        try:
+            archive = zipfile.ZipFile(candidate, "x", zipfile.ZIP_DEFLATED)
+        except FileExistsError:
+            version += 1
+            continue
+        zip_path = candidate
+        created_zip = True
+        with archive as zf:
+            for f, source_path in source_files:  # 原样打包，不做二次加工
+                zf.write(source_path, arcname=f"{f.category}/{source_path.name}")
+        break
 
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in files:  # 原样打包，不做二次加工
-            zf.write(f.stored_path, arcname=f"{f.category}/{Path(f.stored_path).name}")
-
-    pkg = FinanceDeliveryPackage(
-        period_id=period.id, version=version, zip_path=str(zip_path),
-        zip_sha256=sha256_of(zip_path), status="PACKAGED",
-        created_at_src=datetime.now(timezone.utc),
-    )
-    db.add(pkg)
-    db.commit()
-    for f in files:
-        db.add(FinanceDeliveryFile(package_id=pkg.id, archive_file_id=f.id))
-    period.status = "PACKAGED"
-    db.commit()
+    try:
+        pkg = FinanceDeliveryPackage(
+            period_id=period.id, version=version, zip_path=str(zip_path),
+            zip_sha256=sha256_of(zip_path), status="PACKAGED",
+            created_at_src=datetime.now(timezone.utc),
+        )
+        db.add(pkg)
+        db.flush()
+        for f in files:
+            db.add(FinanceDeliveryFile(package_id=pkg.id, archive_file_id=f.id))
+        period.status = "PACKAGED"
+        db.commit()
+    except Exception:
+        db.rollback()
+        if created_zip and zip_path is not None:
+            zip_path.unlink(missing_ok=True)
+        raise
     audit(db, actor, "finance.package.create", "finance_delivery_packages", pkg.id,
           {"version": version, "files": len(files), "sha256": pkg.zip_sha256[:16]})
     return pkg
@@ -246,7 +307,7 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
 
 def send_delivery(db: Session, company: str, year: int, month: int, *,
                   version: int | None = None, to_addrs: list[str] | None = None,
-                  cc_addrs: list[str] | None = None, actor: str = "lan_user") -> dict[str, Any]:
+                  cc_addrs: list[str] | None = None, actor: str = "system") -> dict[str, Any]:
     """发送财务交付包（规格 10 / 16）。
 
     - SMTP 未配置 → AdapterNotConfigured（如实失败）
@@ -264,14 +325,12 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     q = db.query(FinanceDeliveryPackage).filter_by(period_id=period.id)
     if version:
         q = q.filter_by(version=version)
-    pkg = q.order_by(FinanceDeliveryPackage.version.desc()).first()
+    # 同一交付包的首次发送串行化，配合数据库唯一约束避免并发重复“首次发送”。
+    pkg = q.order_by(FinanceDeliveryPackage.version.desc()).with_for_update().first()
     if not pkg:
         raise ValueError("该账期还没有交付包，请先打包")
 
-    import os
-
-    if not os.path.exists(pkg.zip_path):
-        raise RuntimeError(f"ZIP 文件缺失: {pkg.zip_path}")
+    zip_path = managed_data_file(pkg.zip_path, label="ZIP 文件")
 
     to_addrs = to_addrs or list((db.get(MonthlyFinancePeriod, period.id).required_types or {}).get("emails", []) or [])
     if not to_addrs:
@@ -286,9 +345,9 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     kind = "resent" if first_sent else "first"
 
     subject = f"{company} {year}年{month:02d}月 财务资料 V{version or pkg.version}"
-    body = f"见附件 {os.path.basename(pkg.zip_path)}\n（原样资料，SHA256: {pkg.zip_sha256}）"
+    body = f"见附件 {zip_path.name}\n（原样资料，SHA256: {pkg.zip_sha256}）"
     try:
-        message_id = adapter.send(subject, body, to_addrs, cc_addrs or [], [pkg.zip_path])
+        message_id = adapter.send(subject, body, to_addrs, cc_addrs or [], [str(zip_path)])
     except Exception as exc:
         log = EmailDeliveryLog(package_id=pkg.id, kind=kind, to_addrs=list(to_addrs),
                                cc_addrs=list(cc_addrs or []), status="failed", error=str(exc)[:2000])

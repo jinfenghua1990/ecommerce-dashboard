@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,7 +30,7 @@ class ArchiveFile(Base, PkMixin, TimestampMixin):
     period_year: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     period_month: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     version: Mapped[int] = mapped_column(BigInteger, default=1)
-    uploader: Mapped[str] = mapped_column(String(64), default="lan_user")
+    uploader: Mapped[str] = mapped_column(String(64), default="system")
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -48,6 +48,7 @@ class MonthlyFinancePeriod(Base, PkMixin, TimestampMixin):
 
 class FinanceDeliveryPackage(Base, PkMixin, TimestampMixin):
     __tablename__ = "finance_delivery_packages"
+    __table_args__ = (UniqueConstraint("period_id", "version", name="uq_finance_delivery_package_version"),)
 
     period_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     version: Mapped[int] = mapped_column(BigInteger, default=1)  # V1/V2…，V1 发出后不可变（规格 1.6）
@@ -68,6 +69,15 @@ class EmailDeliveryLog(Base, PkMixin, TimestampMixin):
     """一个账期+版本只允许一条“首次成功发送”；再次发送标记 RESENT（规格 16）。"""
 
     __tablename__ = "email_delivery_logs"
+    __table_args__ = (
+        # 成功的首次发送一包只能有一条；失败记录和 resent 历史均需要保留。
+        Index(
+            "uq_email_delivery_first_sent",
+            "package_id",
+            unique=True,
+            postgresql_where=text("kind = 'first' AND status = 'sent'"),
+        ),
+    )
 
     package_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(16), default="first")  # first/resent

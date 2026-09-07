@@ -13,6 +13,8 @@ class User(Base, PkMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # RBAC：pbkdf2_sha256 散列，登录后签发 HMAC 令牌（见 core/auth.py）
     hashed_password: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # 每次改密、退出或强制重置密码时递增，使此前签发的长期令牌立即失效。
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     # user_roles 表无外键约束，显式指定 join 条件
     roles: Mapped[list["Role"]] = relationship(
         secondary="user_roles",

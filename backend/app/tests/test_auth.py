@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
 from app.core.auth import create_token, decode_token, hash_password, verify_password
+from app.config import settings
 from app.main import app
 from app.models.org import AuditLog, Role, User, UserRole
 
@@ -24,6 +26,7 @@ def test_token_roundtrip():
     assert payload is not None
     assert payload["sub"] == "alice"
     assert payload["uid"] == 42
+    assert payload["ver"] == 0
 
 
 def test_token_tampered_rejected():
@@ -33,6 +36,7 @@ def test_token_tampered_rejected():
     assert decode_token("not-a-token") is None
 
 
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式按局域网访问，不启用接口鉴权")
 def test_protected_endpoint_requires_token(db_session):
     """无令牌访问受保护接口必须 401。"""
     with TestClient(app) as anon:
@@ -42,6 +46,17 @@ def test_protected_endpoint_requires_token(db_session):
         assert r.status_code == 401
 
 
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式按局域网访问，不启用接口鉴权")
+def test_query_string_token_is_rejected(client):
+    user = client._pytest_user
+    token = create_token(uid=user.id, username=user.username, token_version=user.token_version)
+    r = client.get(
+        f"/api/v1/system/health?access_token={token}",
+        headers={"Authorization": ""},
+    )
+    assert r.status_code == 401
+
+
 def test_healthz_public(db_session):
     """健康检查保持公开（容器探针依赖）。"""
     with TestClient(app) as anon:
@@ -49,6 +64,7 @@ def test_healthz_public(db_session):
         assert r.status_code == 200
 
 
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式不依赖登录态确定当前操作者")
 def test_login_success_and_me(client, db_session):
     user = User(
         username="alice",
@@ -95,6 +111,7 @@ def test_login_wrong_password(client, db_session):
     db_session.commit()
 
 
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式不启用账号密码链路")
 def test_change_password(client, db_session):
     user = User(username="carol", display_name="", hashed_password=hash_password("old-pass-123"))
     db_session.add(user)
@@ -119,7 +136,61 @@ def test_change_password(client, db_session):
     db_session.expire_all()
     fresh = db_session.get(User, user.id)
     assert verify_password("new-pass-456", fresh.hashed_password)
+    assert fresh.token_version == 1
+
+    # 改密后此前签发的令牌立即失效，新密码可重新登录。
+    expired = client.get("/api/v1/auth/me", headers=headers)
+    assert expired.status_code == 401
+    relogin = client.post(
+        "/api/v1/auth/login",
+        json={"username": "carol", "password": "new-pass-456", "remember_me": True},
+    )
+    assert relogin.status_code == 200
+    payload = decode_token(relogin.json()["accessToken"])
+    assert payload is not None
+    assert payload["ver"] == 1
 
     db_session.execute(delete(AuditLog).where(AuditLog.actor == "carol"))
+    db_session.execute(delete(User).where(User.id == user.id))
+    db_session.commit()
+
+
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式不启用账号密码链路")
+def test_logout_revokes_existing_token(client, db_session):
+    user = User(username="dave", display_name="", hashed_password=hash_password("dave-pass-123"))
+    db_session.add(user)
+    db_session.flush()
+    token = create_token(uid=user.id, username=user.username, token_version=user.token_version)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert client.post("/api/v1/auth/logout", headers=headers).status_code == 200
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 401
+
+    db_session.execute(delete(AuditLog).where(AuditLog.actor == "dave"))
+    db_session.execute(delete(User).where(User.id == user.id))
+    db_session.commit()
+
+
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式不启用 RBAC 读写限制")
+def test_viewer_is_read_only(client, db_session):
+    viewer_role = db_session.scalar(select(Role).where(Role.code == "viewer"))
+    user = User(username="view-only", display_name="", hashed_password=hash_password("view-pass-123"))
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(UserRole(user_id=user.id, role_id=viewer_role.id))
+    db_session.flush()
+    token = create_token(uid=user.id, username=user.username, token_version=user.token_version)
+    headers = {"Authorization": f"Bearer {token}"}
+    db_session.expire_all()
+
+    assert client.get("/api/v1/reconciliation/rules", headers=headers).status_code == 200
+    denied = client.post(
+        "/api/v1/reconciliation/rules",
+        headers=headers,
+        json={"match_pattern": "test", "platform": "test"},
+    )
+    assert denied.status_code == 403
+
+    db_session.execute(delete(UserRole).where(UserRole.user_id == user.id))
     db_session.execute(delete(User).where(User.id == user.id))
     db_session.commit()

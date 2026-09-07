@@ -36,7 +36,8 @@ def list_openings(db: Session) -> list[dict[str, Any]]:
 
 def upsert_opening(db: Session, *, opening_id: int | None = None, kind: str, ref: str = "",
                    amount: str | None = None, quantity: str | None = None,
-                   as_of_date: date | None = None, note: str = "") -> OpeningBalance:
+                   as_of_date: date | None = None, note: str = "",
+                   actor: str = "system") -> OpeningBalance:
     if kind not in KINDS:
         raise ValueError(f"非法期初类别: {kind}")
     amt = to_decimal(amount) if amount is not None else None
@@ -53,7 +54,7 @@ def upsert_opening(db: Session, *, opening_id: int | None = None, kind: str, ref
         row.as_of_date = as_of_date
         row.note = note
         db.commit()
-        audit(db, "lan_user", "opening.update", "opening_balances", row.id,
+        audit(db, actor, "opening.update", "opening_balances", row.id,
               {"from": {"kind": old[0], "amount": str(old[2]) if old[2] is not None else None},
                "to": {"kind": kind, "amount": str(amt) if amt is not None else None}})
         return row
@@ -62,22 +63,22 @@ def upsert_opening(db: Session, *, opening_id: int | None = None, kind: str, ref
                          as_of_date=as_of_date, note=note)
     db.add(row)
     db.commit()
-    audit(db, "lan_user", "opening.create", "opening_balances", row.id,
+    audit(db, actor, "opening.create", "opening_balances", row.id,
           {"kind": kind, "ref": ref, "amount": str(amt) if amt is not None else None,
            "quantity": str(qty) if qty is not None else None})
     return row
 
 
-def delete_opening(db: Session, opening_id: int) -> None:
+def delete_opening(db: Session, opening_id: int, actor: str = "system") -> None:
     row = db.get(OpeningBalance, opening_id)
     if row:
         db.delete(row)
         db.commit()
-        audit(db, "lan_user", "opening.delete", "opening_balances", opening_id, {"kind": row.kind})
+        audit(db, actor, "opening.delete", "opening_balances", opening_id, {"kind": row.kind})
 
 
 def adjust(db: Session, *, opening_id: int, delta: str, reason: str,
-           actor: str = "lan_user") -> OpeningAdjustment:
+           actor: str = "system") -> OpeningAdjustment:
     """历史差异调整：单独保存、审计留痕，不篡改原记录与历史订单（规格 11）。"""
     row = db.get(OpeningBalance, opening_id)
     if not row:

@@ -1,9 +1,10 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.api.deps import current_actor
 from app.services import integration_service
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
@@ -15,9 +16,9 @@ def list_integrations(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 
 
 @router.post("/jackyun/test")
-def test_jackyun(db: Session = Depends(get_db)) -> dict[str, Any]:
+def test_jackyun(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """真实 MCP 连接测试：initialize → tools/list。结果如实返回。"""
-    return integration_service.test_jackyun(db)
+    return integration_service.test_jackyun(db, actor=current_actor(request))
 
 
 # ---------- 1688 OAuth（规格 7.2：先完成授权页面/callback 骨架；未配置如实显示等待） ----------

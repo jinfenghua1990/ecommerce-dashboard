@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getToken } from "@/lib/api";
+import { authenticatedFetch } from "@/lib/api";
 
 type Pkg = { id: number; version: number; status: string; sha256: string; createdAt: string | null };
 type Period = {
@@ -44,7 +44,7 @@ export default function FinancePage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const loadPeriods = useCallback(() => {
-    fetch("/api/v1/finance/periods", { cache: "no-store" })
+    authenticatedFetch("/api/v1/finance/periods", { cache: "no-store" })
       .then((r) => r.json())
       .then((d: Period[]) => {
         setPeriods(d);
@@ -55,7 +55,7 @@ export default function FinancePage() {
 
   const loadFiles = useCallback(() => {
     if (!sel) return;
-    fetch(`/api/v1/finance/${sel.year}/${sel.month}/files`, { cache: "no-store" })
+    authenticatedFetch(`/api/v1/finance/${sel.year}/${sel.month}/files`, { cache: "no-store" })
       .then((r) => r.json())
       .then(setFiles)
       .catch(() => {});
@@ -78,7 +78,7 @@ export default function FinancePage() {
     fd.append("category", category);
     setBusy(true);
     try {
-      const res = await fetch("/api/v1/finance/files", { method: "POST", body: fd });
+      const res = await authenticatedFetch("/api/v1/finance/files", { method: "POST", body: fd });
       const d = await res.json();
       if (res.ok) {
         setMsg(`已归档 v${d.version} · SHA256 ${d.sha256.slice(0, 16)}…`);
@@ -97,7 +97,7 @@ export default function FinancePage() {
     if (!sel) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/v1/finance/${sel.year}/${sel.month}/${path}`, {
+      const res = await authenticatedFetch(`/api/v1/finance/${sel.year}/${sel.month}/${path}`, {
         method: "POST",
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body: body ? JSON.stringify(body) : undefined,
@@ -108,6 +108,28 @@ export default function FinancePage() {
       setBusy(false);
       loadPeriods();
       loadFiles();
+    }
+  }
+
+  async function downloadPackage(pkg: Pkg, year: number, month: number) {
+    setBusy(true);
+    try {
+      const res = await authenticatedFetch(`/api/v1/finance/packages/${pkg.id}/download`);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setMsg(`下载失败：${d.detail ?? res.status}`);
+        return;
+      }
+      const blobUrl = URL.createObjectURL(await res.blob());
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `finance_${year}${String(month).padStart(2, "0")}_V${pkg.version}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -189,14 +211,17 @@ export default function FinancePage() {
               {p.packages.length > 0 && ` · 交付包 V${p.packages.map((x) => x.version).join("/V")}`}
             </div>
             {p.packages.map((pkg) => (
-              <a
+              <button
                 key={pkg.id}
-                href={`/api/v1/finance/packages/${pkg.id}/download?access_token=${getToken() ?? ""}`}
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void downloadPackage(pkg, p.year, p.month);
+                }}
+                disabled={busy}
                 className="mt-2 inline-block text-xs text-indigo-600 hover:underline"
               >
                 下载 finance ZIP V{pkg.version}（{pkg.status}）
-              </a>
+              </button>
             ))}
           </div>
         ))}
@@ -242,6 +267,7 @@ export default function FinancePage() {
                     <th className="px-4 py-2.5 font-medium">版本</th>
                     <th className="px-4 py-2.5 font-medium">SHA256</th>
                     <th className="px-4 py-2.5 font-medium">上传时间</th>
+                    <th className="px-4 py-2.5 font-medium">核对</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -253,6 +279,15 @@ export default function FinancePage() {
                       <td className="px-4 py-2.5 font-mono text-xs text-gray-400">{r.sha256}…</td>
                       <td className="px-4 py-2.5 text-xs text-gray-400">
                         {r.uploadedAt ? new Date(r.uploadedAt).toLocaleString("zh-CN") : "—"}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <a
+                          href={`/api/v1/finance/files/${r.id}/download`}
+                          download={r.originalName}
+                          className="inline-flex items-center gap-1 rounded-md border border-indigo-200 px-2.5 py-1 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50"
+                        >
+                          下载核对
+                        </a>
                       </td>
                     </tr>
                   ))}

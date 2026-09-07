@@ -57,7 +57,12 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="账号已停用")
 
     ttl = _TOKEN_TTL_REMEMBER if body.remember_me else _TOKEN_TTL_DEFAULT
-    token = create_token(uid=user.id, username=user.username, ttl_seconds=ttl)
+    token = create_token(
+        uid=user.id,
+        username=user.username,
+        token_version=user.token_version,
+        ttl_seconds=ttl,
+    )
     audit(db, user.username, "LOGIN_SUCCESS", detail={"rememberMe": body.remember_me})
     return {"accessToken": token, "user": _user_payload(user)}
 
@@ -80,9 +85,25 @@ def change_password(
     if not verify_password(body.old_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="原密码不正确")
     user.hashed_password = hash_password(body.new_password)
+    user.token_version += 1
     db.add(user)
     db.commit()
     audit(db, user.username, "PASSWORD_CHANGED", object_type="user", object_id=str(user.id))
+    return {"ok": True}
+
+
+@router.post("/logout")
+def logout(
+    user: User = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """退出并撤销该账号此前签发的全部令牌。"""
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录")
+    user.token_version += 1
+    db.add(user)
+    db.commit()
+    audit(db, user.username, "LOGOUT", object_type="user", object_id=str(user.id))
     return {"ok": True}
 
 

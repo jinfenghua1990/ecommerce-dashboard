@@ -1,0 +1,454 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { procurementChainApi, ChainOverview, ChainOrderRow, PendingLink } from "@/lib/api";
+
+/** 链路环节总数：① 订单 → ② SKU → ③ 采购单 → ④ 入库 → ⑤ 发票 → ⑥ 付款 → ⑦ 认证 */
+const STAGE_TOTAL = 7;
+const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦"];
+
+/** 每个环节的补数据入口（环节 key → 跳转页 + 动作名） */
+const STAGE_ACTION: Record<string, { href: string; act: string }> = {
+  order: { href: "/alibaba1688-import", act: "导入 1688 订单" },
+  sku: { href: "/purchase", act: "细化采购内容" },
+  jackyunPo: { href: "/jackyun-import", act: "导入吉客云采购单" },
+  inbound: { href: "/jackyun-import", act: "导入入库单" },
+  invoice: { href: "/tax-invoices", act: "导入发票清单" },
+  paid: { href: "/jackyun-import", act: "导入结算单" },
+  verified: { href: "/tax-invoices", act: "查看发票清单" },
+};
+
+/** 维度色：1688 导出 / 本平台采购中心 / 吉客云 / 税务 */
+const DIM_DOT: Record<string, string> = {
+  "1688": "bg-indigo-500",
+  purchase: "bg-violet-500",
+  jackyun: "bg-teal-500",
+  tax: "bg-amber-500",
+};
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  return "¥" + v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function fmtDate(s: string | null | undefined): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 已完成环节数：后端已给 doneCount，缺字段时按 stages 兜底。 */
+function doneCount(row: ChainOrderRow): number {
+  if (typeof row.doneCount === "number") return row.doneCount;
+  return (row.stages ?? []).filter((s) => s.done).length;
+}
+
+export default function ProcurementChainPage() {
+  const [overview, setOverview] = useState<ChainOverview | null>(null);
+  const [orders, setOrders] = useState<ChainOrderRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [pending, setPending] = useState<PendingLink[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"all" | "full" | "gap">("all");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [ov, ord, pen] = await Promise.all([
+        procurementChainApi.overview(),
+        procurementChainApi.orders(500),
+        procurementChainApi.pending(),
+      ]);
+      setOverview(ov);
+      setOrders(ord.items);
+      setTotal(ord.total);
+      setPending(pen.items);
+    } catch {
+      setNotice("数据加载失败，请刷新页面");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  async function runMatch() {
+    setBusy(true);
+    try {
+      const res = await procurementChainApi.runMatch();
+      setNotice(res.created > 0 ? `匹配完成，新增 ${res.created} 条建议` : "匹配完成，暂无新增建议");
+      await loadAll();
+    } catch {
+      setNotice("匹配失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm(kind: string, linkId: number) {
+    setBusy(true);
+    try {
+      if (kind === "invoice") await procurementChainApi.confirmInvoiceLink(linkId);
+      else await procurementChainApi.confirmLink(linkId);
+      await loadAll();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reject(kind: string, linkId: number) {
+    setBusy(true);
+    try {
+      if (kind === "invoice") await procurementChainApi.deleteInvoiceLink(linkId);
+      else await procurementChainApi.deleteLink(linkId);
+      await loadAll();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-gray-400">
+        <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-indigo-500" />
+        加载中…
+      </div>
+    );
+  }
+
+  const shown = orders.filter((r) => {
+    const n = doneCount(r);
+    if (statusFilter === "full") return n >= STAGE_TOTAL;
+    if (statusFilter === "gap") return n < STAGE_TOTAL;
+    return true;
+  });
+
+  return (
+    <div className="flex min-h-screen flex-col bg-gray-50">
+      {/* 顶栏 */}
+      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 px-6 py-3 backdrop-blur">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <span className="h-4 w-1 rounded-full bg-indigo-600" />
+            <h1 className="text-[15px] font-semibold tracking-tight text-gray-900">采购全链路</h1>
+            <span className="ml-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-600">
+              {total ? `${total} 个订单` : "暂无数据"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/alibaba1688-import"
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+            >
+              + 导入 1688 订单
+            </Link>
+            <button
+              onClick={runMatch}
+              disabled={busy}
+              className="rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:bg-indigo-700 active:scale-[0.98] disabled:opacity-50"
+            >
+              {busy ? "匹配中…" : "触发自动匹配"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-[1600px] flex-1 space-y-4 px-6 py-4">
+        {notice && (
+          <div className="flex items-center justify-between rounded-lg border border-indigo-100 bg-indigo-50/70 px-3.5 py-2 text-xs text-indigo-700">
+            <span>{notice}</span>
+            <button onClick={() => setNotice("")} className="text-indigo-400 hover:text-indigo-600">✕</button>
+          </div>
+        )}
+
+        {/* 7 环节流程条 */}
+        {overview && (
+          <section className="rounded-xl border border-gray-200 bg-white p-3">
+            <div className="flex flex-wrap items-stretch gap-1">
+              {(overview.stages ?? []).map((s) => {
+                const done = s.count > 0;
+                const action = STAGE_ACTION[s.key];
+                return (
+                  <Link
+                    key={s.key}
+                    href={action?.href ?? "#"}
+                    title={`${s.label}｜${action?.act ?? ""}：${s.count}/${overview.total}（${s.pct}%）`}
+                    className={`group flex min-w-[116px] flex-1 items-center justify-between rounded-lg px-3 py-2.5 transition-colors ${
+                      done ? "bg-indigo-50/80 hover:bg-indigo-50" : "bg-gray-50 hover:bg-gray-100"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
+                            DIM_DOT[s.dimension] ?? "bg-gray-300"
+                          }`}
+                        />
+                        <span className={`text-[11px] ${done ? "text-indigo-400" : "text-gray-400"}`}>
+                          {CIRCLED[s.no - 1] ?? s.no} {s.short}
+                        </span>
+                      </div>
+                      <div
+                        className={`mt-0.5 text-lg font-semibold leading-6 ${
+                          done ? "text-indigo-700" : "text-gray-400"
+                        }`}
+                      >
+                        {s.count}
+                        <span className="ml-1 text-[11px] font-normal text-gray-400">{s.pct}%</span>
+                      </div>
+                      <div className="truncate text-[10px] text-gray-400" title={s.label}>
+                        {s.label}
+                      </div>
+                    </div>
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        done ? "bg-indigo-500" : "bg-gray-200 group-hover:bg-gray-300"
+                      }`}
+                    />
+                  </Link>
+                );
+              })}
+              <div className="flex min-w-[110px] flex-1 items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <div>
+                  <div className="text-[11px] text-amber-500">待确认</div>
+                  <div className="mt-0.5 text-lg font-semibold leading-6 text-amber-600">{overview.pending}</div>
+                </div>
+                {overview.pending > 0 && (
+                  <span className="animate-pulse rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                    需处理
+                  </span>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* 待确认区 */}
+        {pending.length > 0 && (
+          <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+            <div className="mb-2.5 flex items-center gap-2">
+              <span className="h-3.5 w-1 rounded-full bg-amber-400" />
+              <h2 className="text-sm font-medium text-amber-800">关联待确认</h2>
+              <span className="text-[11px] text-amber-500">{pending.length} 条建议</span>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {pending.map((p) => (
+                <div
+                  key={`${p.kind}-${p.linkId}`}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-amber-100 bg-white px-3 py-2"
+                >
+                  <div className="min-w-0 text-sm">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-gray-800">{p.orderNo}</span>
+                      <span className="text-gray-300">→</span>
+                      <span className="truncate font-medium text-indigo-600">{p.targetNo}</span>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-gray-400">
+                      <span className="rounded bg-gray-50 px-1 py-px text-gray-500">
+                        {p.targetType === "inbound" ? "入库" : p.targetType === "settlement" ? "付款" : "发票"}
+                      </span>
+                      {p.confidence !== null && <span>置信度 {(p.confidence * 100).toFixed(0)}%</span>}
+                      {p.note && <span className="truncate">{p.note}</span>}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    <button
+                      onClick={() => confirm(p.kind, p.linkId)}
+                      disabled={busy}
+                      className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      确认
+                    </button>
+                    <button
+                      onClick={() => reject(p.kind, p.linkId)}
+                      disabled={busy}
+                      className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* 订单列表（一级）：简洁行，点击进入二级链路详情 */}
+        <section className="rounded-xl border border-gray-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="h-3.5 w-1 rounded-full bg-indigo-600" />
+              <h2 className="text-sm font-medium text-gray-800">订单列表</h2>
+              <span className="text-[11px] text-gray-400">点击「详情」查看单个订单的完整采购链路</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {(
+                [
+                  { key: "all", label: "全部", n: orders.length },
+                  { key: "gap", label: "有缺口", n: orders.filter((r) => doneCount(r) < STAGE_TOTAL).length },
+                  { key: "full", label: "已完成", n: orders.filter((r) => doneCount(r) >= STAGE_TOTAL).length },
+                ] as { key: "all" | "full" | "gap"; label: string; n: number }[]
+              ).map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setStatusFilter(f.key)}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    statusFilter === f.key ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                  }`}
+                >
+                  {f.label}
+                  <span className={`ml-1 tabular-nums ${statusFilter === f.key ? "text-gray-300" : "text-gray-400"}`}>
+                    {f.n}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1180px] text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-[11px] text-gray-400">
+                  <th className="py-2 pl-4 pr-3 font-medium whitespace-nowrap">订单号 / 时间</th>
+                  <th className="px-3 py-2 font-medium">供应商</th>
+                  <th className="px-3 py-2 font-medium text-right">金额</th>
+                  <th className="px-3 py-2 font-medium">链路环节</th>
+                  <th className="px-3 py-2 font-medium">完成度</th>
+                  <th className="py-2 pl-3 pr-4 font-medium text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((row) => {
+                  const n = doneCount(row);
+                  const full = n >= STAGE_TOTAL;
+                  return (
+                    <tr
+                      key={row.orderId}
+                      className={`border-b border-gray-50 transition-colors last:border-0 hover:bg-indigo-50/30 ${
+                        full ? "" : "bg-amber-50/20"
+                      }`}
+                    >
+                      <td className="py-2 pl-4 pr-3 whitespace-nowrap">
+                        <div className="font-medium text-gray-800">{row.orderNo}</div>
+                        <div className="mt-0.5 text-[11px] leading-4 text-gray-400">
+                          {fmtDate(row.orderDate)}
+                          <span className="mx-1 text-gray-300">·</span>
+                          <span className="text-indigo-600">{row.orderStatus || "已成交"}</span>
+                        </div>
+                        {row.pendingCount > 0 && (
+                          <div className="mt-0.5">
+                            <span className="rounded-full bg-amber-100 px-1.5 py-px text-[10px] font-medium text-amber-600">
+                              待确认 {row.pendingCount}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="max-w-[200px] px-3 py-2">
+                        <div className="truncate text-gray-700" title={row.supplier || row.buyer || ""}>
+                          {row.supplier || row.buyer || "—"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums text-gray-700">
+                        {fmtMoney(row.amount)}
+                      </td>
+
+                      {/* 7 环节状态点 */}
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2.5">
+                          {(row.stages ?? []).map((s) => (
+                            <span
+                              key={s.key}
+                              title={`【${CIRCLED[s.no - 1] ?? s.no}】${s.label}：${s.done ? s.detail : "未完成 · " + s.detail}`}
+                              className={`flex items-center gap-1 whitespace-nowrap text-[11px] ${
+                                s.done ? "text-gray-700" : "text-gray-300"
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-1.5 w-1.5 rounded-full ${
+                                  s.done ? "bg-emerald-500" : "bg-gray-200"
+                                }`}
+                              />
+                              {s.short}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* 完成度 */}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-semibold tabular-nums ${full ? "text-emerald-600" : "text-amber-600"}`}>
+                            {n}/{STAGE_TOTAL}
+                          </span>
+                          <div className="h-1 w-14 overflow-hidden rounded-full bg-gray-100">
+                            <div
+                              className={`h-full rounded-full ${full ? "bg-emerald-500" : "bg-amber-400"}`}
+                              style={{ width: `${(n / STAGE_TOTAL) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* 操作 */}
+                      <td className="py-2 pl-3 pr-4 text-right">
+                        <Link
+                          href={`/procurement-chain/detail?id=${row.orderId}`}
+                          className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-100"
+                        >
+                          链路详情 →
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {shown.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={6}>
+                      <div className="flex flex-col items-center gap-3 px-6 py-16">
+                        <p className="text-sm text-gray-400">还没有任何数据，先导入 1688 采购订单开始建立链路</p>
+                        <div className="flex gap-2">
+                          <Link
+                            href="/alibaba1688-import"
+                            className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+                          >
+                            导入 1688 订单 →
+                          </Link>
+                          <Link
+                            href="/jackyun-import"
+                            className="rounded-lg border border-gray-200 bg-white px-4 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                          >
+                            导入吉客云报表
+                          </Link>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 border-t border-gray-100 px-4 py-2.5 text-[11px] text-gray-400">
+            <span className="font-medium text-gray-500">环节说明：</span>
+            <span>
+              ① 1688 订单 → ② 实际采购内容/SKU（采购中心细化）→ ③ 吉客云采购单 → ④ 入库 → ⑤ 发票 → ⑥ 付款 → ⑦ 税务认证
+            </span>
+            <span className="text-gray-300">
+              颜色 = 数据维度：
+              <span className="mx-1 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle" />1688
+              <span className="mx-1 inline-block h-1.5 w-1.5 rounded-full bg-violet-500 align-middle" />采购中心
+              <span className="mx-1 inline-block h-1.5 w-1.5 rounded-full bg-teal-500 align-middle" />吉客云
+              <span className="mx-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />税务
+            </span>
+            <span className="ml-auto text-gray-300">点击「链路详情」进入二级页面查看整条链路</span>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

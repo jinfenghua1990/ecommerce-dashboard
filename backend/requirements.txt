@@ -12,3 +12,8 @@ cryptography>=43
 python-multipart>=0.0.12
 openpyxl>=3.1
 pytest>=8.3
+pandas>=2.0
+
+# 1688 浏览器直采：服务器端 Playwright 驱动真实 Chrome 抓订单（Mac mini 需保持 GUI 登录会话）。
+# channel=chrome 时驱动本机 Google Chrome，无需下载 chromium；否则执行 playwright install chromium。
+playwright>=1.49

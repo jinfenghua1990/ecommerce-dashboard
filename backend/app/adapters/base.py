@@ -4,3 +4,7 @@ class AdapterNotConfigured(Exception):
 
 class AdapterError(Exception):
     """外部调用真实失败。"""
+
+
+class AdapterPermissionError(AdapterError):
+    """外部系统传输可达，但当前应用没有调用业务接口的权限。"""

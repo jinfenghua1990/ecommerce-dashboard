@@ -30,7 +30,7 @@ class OpeningAdjustment(Base, PkMixin, TimestampMixin):
     opening_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     delta: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
-    created_by: Mapped[str] = mapped_column(String(64), default="lan_user")
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
 
 
 class ExceptionRecord(Base, PkMixin, TimestampMixin):

@@ -5,11 +5,11 @@ import MetricCard from "@/components/metric-card";
 import StatusBadge from "@/components/status-badge";
 import { getOverview, Overview } from "@/lib/api";
 
-const METRICS: { key: string; label: string; money?: boolean }[] = [
+const METRICS: { key: string; label: string; money?: boolean; percent?: boolean }[] = [
   { key: "salesAmount", label: "销售额", money: true },
   { key: "netSales", label: "净销售", money: true },
   { key: "orderCount", label: "订单数" },
-  { key: "refundRate", label: "退款率" },
+  { key: "refundRate", label: "退款率", percent: true },
   { key: "grossProfit", label: "商品毛利", money: true },
   { key: "receivable", label: "应回款", money: true },
   { key: "received", label: "已回款", money: true },
@@ -45,7 +45,9 @@ export default function OverviewPage() {
               ? "—"
               : m.money
                 ? `¥${Number(v).toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`
-                : String(v);
+                : m.percent
+                  ? `${v}%`
+                  : String(v);
           return (
             <MetricCard
               key={m.key}

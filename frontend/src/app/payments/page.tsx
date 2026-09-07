@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import MetricCard from "@/components/metric-card";
-import { reconApi, ReconOverview, RuleRow, Suggestion, SettlementRow } from "@/lib/api";
+import { authenticatedFetch, reconApi, ReconOverview, RuleRow, Suggestion, SettlementRow } from "@/lib/api";
 
 const CONFIDENCE_LABEL: Record<string, string> = { high: "高", medium: "中", low: "低" };
 const CONFIDENCE_STYLE: Record<string, string> = {
@@ -47,7 +47,7 @@ export default function PaymentsPage() {
     fd.append("period_month", String(m));
     setImporting(true);
     try {
-      const res = await fetch("/api/v1/reconciliation/import-bank", { method: "POST", body: fd });
+      const res = await authenticatedFetch("/api/v1/reconciliation/import-bank", { method: "POST", body: fd });
       const d = await res.json();
       if (res.ok) {
         flash(`导入完成：解析 ${d.parsed} 行，新增 ${d.created} 条，重复跳过 ${d.duplicates} 条`);
@@ -262,7 +262,7 @@ export default function PaymentsPage() {
           文件只做解析，不修改原始资料。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <input type="file" accept=".xlsx,.xls" className="text-sm" id="bank-xlsx" />
+          <input type="file" accept=".xlsx" className="text-sm" id="bank-xlsx" />
           <input
             value={importPeriod}
             onChange={(e) => setImportPeriod(e.target.value)}

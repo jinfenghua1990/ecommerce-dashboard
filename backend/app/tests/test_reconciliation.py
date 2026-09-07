@@ -1,5 +1,12 @@
 from datetime import date
 
+import pytest
+from sqlalchemy import delete
+
+from app.models.bank import BankAccount, BankTransaction
+from app.models.org import AuditLog
+from app.models.payment import ReconciliationMatch, SettlementRecord
+from app.services import reconciliation as rc
 from app.services.reconciliation import (
     build_fingerprint,
     match_platform,
@@ -83,3 +90,45 @@ def test_score_in_period_vs_near_end():
     near_end = _score(txn_date=date(2026, 9, 3))
     assert in_period["score"] == 95
     assert near_end["score"] == 90  # 账期内+15 vs 距期末≤7天+10
+
+
+def test_one_bank_transaction_cannot_confirm_two_settlements(db_session):
+    """一笔实际入账只能计入一个应收，拒绝后才允许重新确认到另一个目标。"""
+    account_no = "PYTEST-RECON-UNIQUE"
+    actor = "pytest-reconciliation"
+    txn = first = second = None
+    try:
+        txn, created = rc.add_transaction(
+            db_session, account_no=account_no, txn_date=date(2097, 6, 1), direction="in",
+            amount="100.00", counterparty_name="测试平台", voucher_no="PYTEST-RECON-001", actor=actor,
+        )
+        assert created is True
+        first = rc.add_settlement(
+            db_session, platform="测试平台A", period_year=2097, period_month=6,
+            expected_amount="100.00", actor=actor,
+        )
+        second = rc.add_settlement(
+            db_session, platform="测试平台B", period_year=2097, period_month=6,
+            expected_amount="100.00", actor=actor,
+        )
+
+        rc.confirm_match(db_session, txn_id=txn.id, settlement_id=first.id, actor=actor)
+        with pytest.raises(ValueError, match="其他目标"):
+            rc.confirm_match(db_session, txn_id=txn.id, settlement_id=second.id, actor=actor)
+
+        rc.reject_match(db_session, txn_id=txn.id, settlement_id=first.id, actor=actor)
+        assert db_session.get(BankTransaction, txn.id).matched_at is None
+        rc.confirm_match(db_session, txn_id=txn.id, settlement_id=second.id, actor=actor)
+        assert rc.settled_amount_of(db_session, second.id) == 100
+    finally:
+        if txn:
+            db_session.execute(delete(ReconciliationMatch).where(ReconciliationMatch.txn_id == txn.id))
+        if first:
+            db_session.execute(delete(SettlementRecord).where(SettlementRecord.id == first.id))
+        if second:
+            db_session.execute(delete(SettlementRecord).where(SettlementRecord.id == second.id))
+        if txn:
+            db_session.execute(delete(BankTransaction).where(BankTransaction.id == txn.id))
+        db_session.execute(delete(BankAccount).where(BankAccount.account_no == account_no))
+        db_session.execute(delete(AuditLog).where(AuditLog.actor == actor))
+        db_session.commit()

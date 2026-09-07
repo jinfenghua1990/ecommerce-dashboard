@@ -2,7 +2,7 @@
 
 只用标准库实现（无新增依赖，避免镜像构建风险）：
 - 口令：pbkdf2_sha256$<iterations>$<salt_hex>$<dk_hex>，常量时间比较
-- 令牌：base64url(payload).base64url(hmac_sha256(payload))，payload 含 sub/uid/exp/iat
+- 令牌：base64url(payload).base64url(hmac_sha256(payload))，payload 含 sub/uid/exp/iat/ver
 密钥统一派生自 APP_SECRET_KEY（服务端 .env，禁止进入前端/Git）。
 """
 
@@ -58,10 +58,14 @@ def _b64d(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
-def create_token(*, uid: int, username: str, ttl_seconds: int = _TOKEN_TTL_SECONDS) -> str:
+def create_token(
+    *, uid: int, username: str, token_version: int = 0,
+    ttl_seconds: int = _TOKEN_TTL_SECONDS,
+) -> str:
     payload = {
         "sub": username,
         "uid": uid,
+        "ver": token_version,
         "iat": int(time.time()),
         "exp": int(time.time()) + ttl_seconds,
     }

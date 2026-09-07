@@ -1,74 +1,62 @@
-# 电商经营数据平台 — 本地运维入口
+# 电商经营数据平台 — 原生 macOS 运维入口
 # 用法: make <target>
 
-COMPOSE := docker compose
-APP    := api
-WORKER := worker
-BEAT   := beat
+ROOT := $(CURDIR)
+BACKEND := $(ROOT)/backend
+VENV := $(BACKEND)/.venv
+LAUNCH_LABEL := gui/$(shell id -u)/com.gino.ecommerce-dashboard
+NATIVE_ENV = set -a; . "$(ROOT)/.env"; set +a; export DATABASE_URL="postgresql+psycopg://$$POSTGRES_USER:$$POSTGRES_PASSWORD@localhost:5432/$$POSTGRES_DB"; export REDIS_URL="redis://localhost:6379/0"; export DATA_DIR="$(ROOT)/data";
 
-.PHONY: help
+.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc smoke migrate migration-check exec-api backup fresh
+
 help: ## 列出所有 target
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: up
-up: ## 启动全部 6 服务（首次会 build）
-	$(COMPOSE) up -d --build
+up: restart ## 启动或重新加载本地服务
 
-.PHONY: down
-down: ## 停止并清理
-	$(COMPOSE) down
+restart: ## 重新加载 API、worker 与 beat
+	launchctl kickstart -k "$(LAUNCH_LABEL)"
 
-.PHONY: rebuild
-rebuild: ## 重新 build api/worker/beat 并重启
-	$(COMPOSE) build $(APP) $(WORKER) $(BEAT)
-	$(COMPOSE) up -d --no-deps $(APP) $(WORKER) $(BEAT)
+status: ## 显示本机健康状态
+	curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz; echo
+	launchctl print "$(LAUNCH_LABEL)" | sed -n '1,45p'
 
-.PHONY: rebuild-fe
-rebuild-fe: ## 重新 build 前端并重启（改 frontend/ 后）
-	$(COMPOSE) build frontend
-	$(COMPOSE) up -d --no-deps frontend
+logs: ## 跟踪 API、worker、beat 日志
+	tail -n 100 -f /tmp/ecom_api.log /tmp/ecom_worker.log /tmp/ecom_beat.log
 
-.PHONY: restart
-restart: ## 不重建仅重启 3 容器
-	$(COMPOSE) up -d --no-deps $(APP) $(WORKER) $(BEAT)
+logs-api: ## 跟踪 API 日志
+	tail -n 100 -f /tmp/ecom_api.log
 
-.PHONY: logs
-logs: ## tail 所有日志
-	$(COMPOSE) logs -f --tail=100
+rebuild: restart ## 后端代码已直接由原生虚拟环境加载，重启即可
 
-.PHONY: logs-api
-logs-api: ## tail api 日志
-	$(COMPOSE) logs -f --tail=100 $(APP)
+rebuild-fe: ## 重建静态前端并重启服务
+	cd frontend && npm run build
+	$(MAKE) restart
 
-.PHONY: test
-test: ## 在 api 容器内跑 pytest
-	$(COMPOSE) run --rm $(APP) python -m pytest app/tests -q --tb=line
+test: ## 在本机虚拟环境运行后端测试
+	$(NATIVE_ENV) cd "$(BACKEND)" && "$(VENV)/bin/python" -m pytest app/tests -q --tb=line -p no:cacheprovider
 
-.PHONY: lint
-lint: ## pyflakes 检查
-	cd backend && python3 -m pyflakes app
+lint: ## 编译检查后端 Python 文件
+	cd "$(BACKEND)" && "$(VENV)/bin/python" -m compileall -q app
 
-.PHONY: tsc
 tsc: ## 前端类型检查
 	cd frontend && npx tsc --noEmit
 
-.PHONY: smoke
-smoke: ## GET 端点 0-5xx smoke test（基于 OpenAPI 路由全集）
+smoke: ## 枚举公开 API 并做带鉴权 smoke test
 	./scripts/smoke.sh
 
-.PHONY: migrate
-migrate: ## alembic upgrade head
-	$(COMPOSE) run --rm $(APP) alembic upgrade head
+migrate: ## 应用 Alembic 迁移
+	$(NATIVE_ENV) cd "$(BACKEND)" && "$(VENV)/bin/alembic" upgrade head
 
-.PHONY: migration-check
-migration-check: ## 对比 models 与最新迁移是否漂移
-	$(COMPOSE) run --rm $(APP) alembic check
+migration-check: ## 检查 models 与迁移是否漂移
+	$(NATIVE_ENV) cd "$(BACKEND)" && "$(VENV)/bin/alembic" check
 
-.PHONY: exec-api
-exec-api: ## 进入 api 容器 shell
-	$(COMPOSE) exec $(APP) bash
+exec-api: ## 进入后端原生虚拟环境 shell
+	$(NATIVE_ENV) cd "$(BACKEND)" && exec "$(SHELL)"
 
-.PHONY: fresh
-fresh: ## ⚠️ 销毁所有数据并重建（删 PG volume）
-	$(COMPOSE) down -v
-	$(COMPOSE) up -d --build
+backup: ## 备份 PostgreSQL 与 data/ 原始归档
+	./scripts/backup.sh
+
+fresh: ## 拒绝自动清空真实业务数据
+	@echo "拒绝执行：fresh 会销毁真实数据；如确有需要，请先单独确认目标与备份。"
+	@exit 2

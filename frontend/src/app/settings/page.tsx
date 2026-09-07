@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import StatusBadge from "@/components/status-badge";
-import { changePassword, getOverview, IntegrationStatus, openingApi, OpeningData, testJackyun } from "@/lib/api";
+import { authenticatedFetch, changePassword, getOverview, IntegrationStatus, openingApi, OpeningData, testJackyun } from "@/lib/api";
 
-type TestState = { loading: boolean; result?: string; tools?: string[] };
+type TestState = { loading: boolean; result?: string; tools?: string[]; warning?: boolean };
 
 const KIND_LABEL: Record<string, string> = {
   platform_receivable: "平台期初待回款",
@@ -38,8 +38,7 @@ export default function SettingsPage() {
     setPwMsg("");
     try {
       await changePassword(pwOld, pwNew);
-      setPwMsg("密码已修改，下次登录请使用新密码");
-      setPwOld(""); setPwNew("");
+      return;
     } catch (e) {
       setPwMsg(`修改失败：${e instanceof Error ? e.message : String(e)}`);
     }
@@ -77,7 +76,16 @@ export default function SettingsPage() {
     try {
       const res = await testJackyun();
       if (res.ok) {
-        setJackyun({ loading: false, result: "连接成功", tools: res.tools });
+        setJackyun({
+          loading: false,
+          result: res.status === "transport_connected"
+            ? "MCP 传输连接成功；业务 API 尚未验证，请执行一次商品/SKU同步确认权限"
+            : res.businessReady === false
+            ? "MCP 传输连接成功；吉客云业务 API 权限仍未开通"
+            : "连接与业务接口状态正常",
+          tools: res.tools,
+          warning: res.businessReady === false,
+        });
       } else {
         setJackyun({ loading: false, result: `失败：${res.error}` });
       }
@@ -154,7 +162,7 @@ export default function SettingsPage() {
           {jackyun.loading ? "测试中…" : "立即测试连接"}
         </button>
         {jackyun.result && (
-          <div className={`mt-3 text-sm ${jackyun.tools ? "text-emerald-700" : "text-red-600"}`}>
+          <div className={`mt-3 text-sm ${jackyun.warning ? "text-amber-700" : jackyun.tools ? "text-emerald-700" : "text-red-600"}`}>
             {jackyun.result}
           </div>
         )}
@@ -180,7 +188,7 @@ export default function SettingsPage() {
           <button
             onClick={async () => {
               try {
-                const res = await fetch("/api/v1/integrations/alibaba1688/auth-url", { cache: "no-store" });
+                const res = await authenticatedFetch("/api/v1/integrations/alibaba1688/auth-url", { cache: "no-store" });
                 const d = await res.json();
                 if (res.ok && d.authorizationUrl) {
                   window.location.href = d.authorizationUrl;
@@ -200,8 +208,8 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-6 max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-800">
-        局域网信任模式：同一内网设备均可访问本平台。请勿在路由器做端口转发，勿将 18080 暴露公网；
-        未来如需公网/跨网访问，必须先恢复认证、权限隔离与 TLS。
+        局域网访问已启用账号密码保护；勾选“记住登录”后，同一浏览器 30 天内免重复输入。
+        请勿在路由器做端口转发，勿将 8000 暴露公网；如需公网访问，必须增加 TLS 和更严格的网络边界。
       </div>
 
       {/* 期初初始化（规格 11） */}

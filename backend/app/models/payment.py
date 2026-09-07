@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Index, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,15 @@ class ReconciliationMatch(Base, PkMixin, TimestampMixin):
     """匹配输出 confidence + target + status，不能只靠金额（规格 8.2）。"""
 
     __tablename__ = "reconciliation_matches"
+    __table_args__ = (
+        # 一笔银行流水只能确认到一个真实目标，rejected/suggested 历史不受限制。
+        Index(
+            "uq_reconciliation_matches_confirmed_txn",
+            "txn_id",
+            unique=True,
+            postgresql_where=text("status = 'confirmed'"),
+        ),
+    )
 
     txn_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     target_type: Mapped[str] = mapped_column(String(32), default="")  # settlement/opening/expense

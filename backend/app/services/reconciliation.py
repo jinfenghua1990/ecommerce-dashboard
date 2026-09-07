@@ -13,6 +13,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import audit
@@ -98,15 +100,16 @@ def score_match(*, txn_date: date, txn_amount, counterparty_name: str, summary: 
 
 # ---------- DB 层 ----------
 
-def seed_rules_if_empty(db: Session) -> None:
+def seed_rules_if_empty(db: Session) -> bool:
     if db.query(CounterpartyMappingRule).count() > 0:
-        return
+        return False
     for pattern, platform in DEFAULT_RULES:
         db.add(CounterpartyMappingRule(match_pattern=pattern, match_type="contains", platform=platform,
                                        note="规格 8.2 默认规则"))
     db.commit()
     audit(db, "system", "reconciliation.rules.seed", "counterparty_mapping_rules", "",
           {"count": len(DEFAULT_RULES)})
+    return True
 
 
 def list_rules(db: Session) -> list[CounterpartyMappingRule]:
@@ -118,7 +121,8 @@ def active_rule_tuples(db: Session) -> list[tuple[str, str, str]]:
             for r in list_rules(db) if r.enabled]
 
 
-def add_rule(db: Session, *, match_pattern: str, match_type: str, platform: str, note: str = "") -> CounterpartyMappingRule:
+def add_rule(db: Session, *, match_pattern: str, match_type: str, platform: str,
+             note: str = "", actor: str = "system") -> CounterpartyMappingRule:
     if match_type not in ("contains", "equals"):
         raise ValueError("非法匹配类型")
     if not match_pattern or not platform:
@@ -127,17 +131,17 @@ def add_rule(db: Session, *, match_pattern: str, match_type: str, platform: str,
                                   platform=platform, note=note)
     db.add(row)
     db.commit()
-    audit(db, "lan_user", "reconciliation.rule.create", "counterparty_mapping_rules", row.id,
+    audit(db, actor, "reconciliation.rule.create", "counterparty_mapping_rules", row.id,
           {"pattern": match_pattern, "platform": platform})
     return row
 
 
-def delete_rule(db: Session, rule_id: int) -> None:
+def delete_rule(db: Session, rule_id: int, actor: str = "system") -> None:
     row = db.get(CounterpartyMappingRule, rule_id)
     if row:
         db.delete(row)
         db.commit()
-        audit(db, "lan_user", "reconciliation.rule.delete", "counterparty_mapping_rules", rule_id,
+        audit(db, actor, "reconciliation.rule.delete", "counterparty_mapping_rules", rule_id,
               {"pattern": row.match_pattern, "platform": row.platform})
 
 
@@ -153,7 +157,9 @@ def ensure_account(db: Session, account_no: str, account_name: str = "") -> Bank
 
 def add_transaction(db: Session, *, account_no: str, txn_date: date, direction: str,
                     amount, counterparty_name: str = "", counterparty_account: str = "",
-                    summary: str = "", voucher_no: str = "") -> tuple[BankTransaction, bool]:
+                    summary: str = "", voucher_no: str = "",
+                    import_batch_id: int | None = None,
+                    actor: str = "system") -> tuple[BankTransaction, bool]:
     """登记银行流水。指纹幂等：重复返回已有记录（created=False）。"""
     if direction not in ("in", "out"):
         raise ValueError("方向必须为 in/out")
@@ -164,20 +170,23 @@ def add_transaction(db: Session, *, account_no: str, txn_date: date, direction: 
     if existing:
         return existing, False
     row = BankTransaction(
-        account_id=account.id, txn_date=txn_date, direction=direction,
+        account_id=account.id, import_batch_id=import_batch_id,
+        txn_date=txn_date, direction=direction,
         amount=quantize(to_decimal(amount), Decimal("0.01")),
         counterparty_name=counterparty_name or "", counterparty_account=counterparty_account or "",
         summary=summary or "", voucher_no=voucher_no or "", fingerprint=fp,
     )
     db.add(row)
     db.commit()
-    audit(db, "lan_user", "bank.txn.create", "bank_transactions", row.id,
+    audit(db, actor, "bank.txn.create", "bank_transactions", row.id,
           {"date": txn_date.isoformat(), "amount": str(row.amount), "counterparty": counterparty_name})
     return row, True
 
 
 def import_bank_xlsx(db: Session, *, account_no: str, content: bytes,
-                     period_year: int, period_month: int) -> dict:
+                     period_year: int, period_month: int,
+                     file_name: str, archive_file_id: int,
+                     actor: str = "system") -> dict:
     """解析浙江农信 XLSX 并幂等导入流水（规格 8.1 / 16）。
 
     - 解析结果逐行 add_transaction（指纹幂等，重复跳过）
@@ -189,26 +198,51 @@ def import_bank_xlsx(db: Session, *, account_no: str, content: bytes,
     from app.adapters.bank_file import parse_xlsx
     from app.models.bank import BankImportBatch
 
+    if not (1 <= period_month <= 12):
+        raise ValueError("非法账期")
+    batch = BankImportBatch(
+        source="zjrc", file_name=file_name, archive_file_id=archive_file_id,
+        period_year=period_year, period_month=period_month,
+        row_count=0, status="processing",
+    )
+    db.add(batch)
+    db.commit()
+
     rows = parse_xlsx(content)
+    if not rows:
+        batch.status = "failed"
+        db.commit()
+        audit(db, actor, "bank.import.xlsx.failed", "bank_import_batches", batch.id,
+              {"archiveFileId": archive_file_id, "reason": "未识别到交易明细"})
+        raise ValueError("原始文件已归档，但未识别到交易明细；请确认是 XLSX 流水文件及表头")
     created = duplicates = skipped = 0
     for r in rows:
         if not r.get("txn_date"):
             skipped += 1
             continue
-        amount = r.get("amount_in") or r.get("amount_out")
-        if amount is None:
+        try:
+            amount_in = to_decimal(r["amount_in"]) if r.get("amount_in") is not None else None
+            amount_out = to_decimal(r["amount_out"]) if r.get("amount_out") is not None else None
+        except (TypeError, ValueError):
             skipped += 1
             continue
-        direction = "in" if (r.get("amount_in") is not None and float(r.get("amount_in") or 0) > 0) else "out"
-        txn_date = date.fromisoformat(r["txn_date"])
+        if amount_in is not None and amount_in > 0:
+            direction, amount = "in", amount_in
+        elif amount_out is not None and amount_out > 0:
+            direction, amount = "out", amount_out
+        else:
+            skipped += 1
+            continue
         try:
+            txn_date = date.fromisoformat(r["txn_date"])
             _, is_new = add_transaction(
                 db, account_no=account_no, txn_date=txn_date, direction=direction,
                 amount=amount, counterparty_name=r.get("counterparty") or "",
                 counterparty_account=r.get("counterparty_account") or "",
                 summary=r.get("summary") or "", voucher_no=r.get("voucher_no") or "",
+                import_batch_id=batch.id, actor=actor,
             )
-        except ValueError:
+        except (TypeError, ValueError):
             skipped += 1
             continue
         if is_new:
@@ -216,22 +250,22 @@ def import_bank_xlsx(db: Session, *, account_no: str, content: bytes,
         else:
             duplicates += 1
 
-    batch = BankImportBatch(
-        source="zjrc", file_name=f"import_{period_year:04d}{period_month:02d}.xlsx",
-        period_year=period_year, period_month=period_month,
-        row_count=created + duplicates, status="done",
-    )
-    db.add(batch)
+    batch.row_count = created + duplicates
+    batch.status = "done"
     db.commit()
-    audit(db, "lan_user", "bank.import.xlsx", "bank_import_batches", batch.id,
+    audit(db, actor, "bank.import.xlsx", "bank_import_batches", batch.id,
           {"account": account_no, "parsed": len(rows), "created": created,
            "duplicates": duplicates, "skipped": skipped,
-           "period": f"{period_year}-{period_month:02d}"})
-    return {"parsed": len(rows), "created": created, "duplicates": duplicates, "skipped": skipped}
+           "period": f"{period_year}-{period_month:02d}",
+           "archiveFileId": archive_file_id})
+    return {"batchId": batch.id, "archiveFileId": archive_file_id,
+            "parsed": len(rows), "created": created,
+            "duplicates": duplicates, "skipped": skipped}
 
 
 def add_settlement(db: Session, *, platform: str, period_year: int, period_month: int,
-                   expected_amount, store_name: str = "") -> SettlementRecord:
+                   expected_amount, store_name: str = "",
+                   actor: str = "system") -> SettlementRecord:
     if not (1 <= period_month <= 12):
         raise ValueError("非法账期")
     row = SettlementRecord(
@@ -242,24 +276,39 @@ def add_settlement(db: Session, *, platform: str, period_year: int, period_month
     )
     db.add(row)
     db.commit()
-    audit(db, "lan_user", "settlement.create", "settlement_records", row.id,
+    audit(db, actor, "settlement.create", "settlement_records", row.id,
           {"platform": platform, "period": f"{period_year}-{period_month:02d}",
            "expected": str(row.expected_amount)})
     return row
 
 
-def settled_amount_of(db: Session, settlement_id: int) -> Decimal:
-    rows = (
-        db.query(ReconciliationMatch)
-        .filter_by(target_type="settlement", target_id=settlement_id, status="confirmed")
-        .all()
+def settled_amounts_by_settlement(
+    db: Session,
+    settlement_ids: list[int] | None = None,
+) -> dict[int, Decimal]:
+    """一次聚合取各应收的已确认入账，避免列表和总览逐行查询流水。"""
+    if settlement_ids is not None and not settlement_ids:
+        return {}
+    q = (
+        db.query(
+            ReconciliationMatch.target_id,
+            func.coalesce(func.sum(BankTransaction.amount), Decimal("0")),
+        )
+        .join(BankTransaction, BankTransaction.id == ReconciliationMatch.txn_id)
+        .filter(
+            ReconciliationMatch.target_type == "settlement",
+            ReconciliationMatch.status == "confirmed",
+            BankTransaction.direction == "in",
+        )
+        .group_by(ReconciliationMatch.target_id)
     )
-    total = Decimal("0")
-    for m in rows:
-        txn = db.get(BankTransaction, m.txn_id)
-        if txn and txn.direction == "in" and txn.amount:
-            total += txn.amount
-    return total
+    if settlement_ids is not None:
+        q = q.filter(ReconciliationMatch.target_id.in_(settlement_ids))
+    return {int(target_id): to_decimal(total) for target_id, total in q.all()}
+
+
+def settled_amount_of(db: Session, settlement_id: int) -> Decimal:
+    return settled_amounts_by_settlement(db, [settlement_id]).get(settlement_id, Decimal("0"))
 
 
 def refresh_settlement_status(db: Session, settlement: SettlementRecord) -> None:
@@ -274,8 +323,12 @@ def refresh_settlement_status(db: Session, settlement: SettlementRecord) -> None
     db.commit()
 
 
-def _txn_platform(db: Session, txn: BankTransaction) -> str | None:
-    return match_platform(txn.counterparty_name, active_rule_tuples(db))
+def _txn_platform(
+    db: Session,
+    txn: BankTransaction,
+    rules: list[tuple[str, str, str]] | None = None,
+) -> str | None:
+    return match_platform(txn.counterparty_name, rules if rules is not None else active_rule_tuples(db))
 
 
 def has_confirmed_match(db: Session, txn_id: int) -> bool:
@@ -286,10 +339,34 @@ def has_confirmed_match(db: Session, txn_id: int) -> bool:
     ) > 0
 
 
-def suggest_for_txn(db: Session, txn: BankTransaction, top: int = 3) -> list[dict[str, Any]]:
-    platform_of_txn = _txn_platform(db, txn)
+def confirmed_txn_ids(db: Session, txn_ids: list[int]) -> set[int]:
+    if not txn_ids:
+        return set()
+    return {
+        int(txn_id)
+        for (txn_id,) in (
+            db.query(ReconciliationMatch.txn_id)
+            .filter(ReconciliationMatch.status == "confirmed", ReconciliationMatch.txn_id.in_(txn_ids))
+            .distinct()
+            .all()
+        )
+    }
+
+
+def suggest_for_txn(
+    db: Session,
+    txn: BankTransaction,
+    top: int = 3,
+    *,
+    rules: list[tuple[str, str, str]] | None = None,
+    settlements: list[SettlementRecord] | None = None,
+) -> list[dict[str, Any]]:
+    platform_of_txn = _txn_platform(db, txn, rules)
     results = []
-    for s in db.query(SettlementRecord).filter(SettlementRecord.status != "settled").all():
+    candidates = settlements if settlements is not None else (
+        db.query(SettlementRecord).filter(SettlementRecord.status != "settled").all()
+    )
+    for s in candidates:
         r = score_match(
             txn_date=txn.txn_date, txn_amount=txn.amount,
             counterparty_name=txn.counterparty_name, summary=txn.summary,
@@ -312,11 +389,14 @@ def suggestions(db: Session, limit: int = 50) -> list[dict[str, Any]]:
         .limit(200)
         .all()
     )
+    confirmed_ids = confirmed_txn_ids(db, [txn.id for txn in txns])
+    rules = active_rule_tuples(db)
+    open_settlements = db.query(SettlementRecord).filter(SettlementRecord.status != "settled").all()
     out = []
     for txn in txns:
-        if has_confirmed_match(db, txn.id):
+        if txn.id in confirmed_ids:
             continue
-        best = suggest_for_txn(db, txn, top=1)
+        best = suggest_for_txn(db, txn, top=1, rules=rules, settlements=open_settlements)
         if not best or best[0]["score"] <= 0:
             continue
         s = best[0]["settlement"]
@@ -335,25 +415,29 @@ def suggestions(db: Session, limit: int = 50) -> list[dict[str, Any]]:
     return out
 
 
-def confirm_match(db: Session, *, txn_id: int, settlement_id: int, actor: str = "lan_user") -> ReconciliationMatch:
+def confirm_match(db: Session, *, txn_id: int, settlement_id: int,
+                  actor: str = "system") -> ReconciliationMatch:
     txn = db.get(BankTransaction, txn_id)
     settlement = db.get(SettlementRecord, settlement_id)
     if not txn or not settlement:
         raise ValueError("流水或应收记录不存在")
     if txn.direction != "in":
         raise ValueError("仅入账流水可确认为回款")
-    exists = (
+    confirmed = (
         db.query(ReconciliationMatch)
-        .filter_by(txn_id=txn_id, target_type="settlement", target_id=settlement_id, status="confirmed")
+        .filter_by(txn_id=txn_id, status="confirmed")
         .first()
     )
-    if exists:
-        raise ValueError("该匹配已确认")
-    best = suggest_for_txn(db, txn, top=5)
+    if confirmed:
+        if confirmed.target_type == "settlement" and confirmed.target_id == settlement_id:
+            raise ValueError("该匹配已确认")
+        raise ValueError("该银行流水已确认到其他目标，不可重复确认")
+    rules = active_rule_tuples(db)
+    best = suggest_for_txn(db, txn, top=5, rules=rules)
     hit = next((b for b in best if b["settlement"].id == settlement_id), None)
     score = hit["score"] if hit else 0
     confidence = hit["confidence"] if hit else "low"
-    platform_of_txn = _txn_platform(db, txn)
+    platform_of_txn = _txn_platform(db, txn, rules)
     row = ReconciliationMatch(
         txn_id=txn_id, target_type="settlement", target_id=settlement_id,
         score=score, confidence=confidence, status="confirmed",
@@ -361,7 +445,11 @@ def confirm_match(db: Session, *, txn_id: int, settlement_id: int, actor: str = 
     )
     db.add(row)
     txn.matched_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError("该银行流水已被其他操作确认，请刷新后查看") from exc
     refresh_settlement_status(db, settlement)
     audit(db, actor, "reconciliation.match.confirm", "reconciliation_matches", row.id,
           {"txnId": txn_id, "settlementId": settlement_id, "score": score,
@@ -369,14 +457,21 @@ def confirm_match(db: Session, *, txn_id: int, settlement_id: int, actor: str = 
     return row
 
 
-def reject_match(db: Session, *, txn_id: int, settlement_id: int, actor: str = "lan_user") -> None:
+def reject_match(db: Session, *, txn_id: int, settlement_id: int,
+                 actor: str = "system") -> None:
     row = (
         db.query(ReconciliationMatch)
         .filter_by(txn_id=txn_id, target_type="settlement", target_id=settlement_id)
         .first()
     )
     if row:
+        was_confirmed = row.status == "confirmed"
         row.status = "rejected"
+        db.flush()
+        if was_confirmed and not has_confirmed_match(db, txn_id):
+            txn = db.get(BankTransaction, txn_id)
+            if txn:
+                txn.matched_at = None
         db.commit()
     settlement = db.get(SettlementRecord, settlement_id)
     if settlement:
@@ -388,10 +483,11 @@ def reject_match(db: Session, *, txn_id: int, settlement_id: int, actor: str = "
 def overview(db: Session) -> dict[str, Any]:
     """应回款 / 已回款 / 待回款 + 分平台。页面刷新只查本地库。"""
     settlements = db.query(SettlementRecord).all()
+    settled_amounts = settled_amounts_by_settlement(db, [s.id for s in settlements])
     receivable = Decimal("0")
     per_platform: dict[str, dict[str, Decimal]] = {}
     for s in settlements:
-        settled = settled_amount_of(db, s.id)
+        settled = settled_amounts.get(s.id, Decimal("0"))
         expected = to_decimal(s.expected_amount)
         receivable += expected
         agg = per_platform.setdefault(s.platform, {"expected": Decimal("0"), "settled": Decimal("0")})

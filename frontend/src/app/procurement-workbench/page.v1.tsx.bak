@@ -1,0 +1,1139 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import Link from "next/link";
+import {
+  procurementChainApi,
+  procurementWorkbenchApi,
+  WorkbenchSummary,
+  WorkbenchOrderList,
+  WorkbenchDetail,
+  WorkbenchDimension,
+  WorkbenchStep,
+  WorkbenchOrderItem,
+  WorkbenchStepState,
+  WorkbenchSupplierSummary,
+  WorkbenchSupplierDetail,
+} from "@/lib/api";
+
+const DIM_DOT: Record<WorkbenchDimension, string> = {
+  "1688": "bg-indigo-500",
+  purchase: "bg-violet-500",
+  jackyun: "bg-teal-500",
+  tax: "bg-amber-500",
+};
+
+type OrderStatusFilter = "all" | "pending" | "refine" | "sku" | "po" | "inbound" | "invoice" | "exception" | "done";
+
+const ORDER_FILTERS: { key: OrderStatusFilter; label: string }[] = [
+  { key: "all", label: "全部" },
+  { key: "refine", label: "待完善" },
+  { key: "sku", label: "待匹配 SKU" },
+  { key: "po", label: "待采购单" },
+  { key: "inbound", label: "待入库" },
+  { key: "invoice", label: "待发票" },
+  { key: "exception", label: "异常" },
+  { key: "done", label: "已完成" },
+];
+
+const KPI_DOT: Record<string, string> = {
+  indigo: "bg-indigo-500",
+  violet: "bg-violet-500",
+  amber: "bg-amber-500",
+  teal: "bg-teal-500",
+  rose: "bg-rose-500",
+  red: "bg-red-500",
+};
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  return "¥" + v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function fmtDate(s: string | null | undefined): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fmtClock(s: string | null | undefined): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function fmtDateTime(s: string | null | undefined): string {
+  if (!s) return "未记录";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "未记录";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+}
+
+function relativeTime(s: string | null | undefined): string {
+  if (!s) return "时间缺失";
+  const timestamp = new Date(s).getTime();
+  if (Number.isNaN(timestamp)) return "时间缺失";
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+/** 内联 SVG 缩略图标：按维度色着色，避免引入 icon 库 */
+function StepGlyph({ dim, size = 14 }: { dim: WorkbenchDimension; size?: number }) {
+  const stroke = dim === "1688" ? "#534AB7" : dim === "purchase" ? "#7F77DD" : dim === "jackyun" ? "#0F6E56" : "#854F0B";
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="4" y="6" width="16" height="13" rx="2" stroke={stroke} strokeWidth="1.5" />
+      <path d="M8 10h8M8 14h5" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export default function ProcurementWorkbenchPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const workbenchPath = pathname === "/purchase/workbench" || pathname.startsWith("/purchase/workbench/")
+    ? "/purchase/workbench"
+    : "/procurement-workbench";
+  const initialView = searchParams.get("view") === "suppliers" ? "suppliers" : "orders";
+  const initialSupplierQ = searchParams.get("q") || "";
+
+  const [viewMode, setViewMode] = useState<"orders" | "suppliers">(initialView);
+  const [summary, setSummary] = useState<WorkbenchSummary | null>(null);
+  const [orderList, setOrderList] = useState<WorkbenchOrderList | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<WorkbenchDetail | null>(null);
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>("all");
+  const [sortBy, setSortBy] = useState<"date" | "amount" | "status">("date");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [matchBusy, setMatchBusy] = useState(false);
+  const [actionMessage, setActionMessage] = useState("");
+
+  // 供应商视图状态
+  const [supplierList, setSupplierList] = useState<WorkbenchSupplierSummary[] | null>(null);
+  const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
+  const [supplierDetail, setSupplierDetail] = useState<WorkbenchSupplierDetail | null>(null);
+  const [supplierQ, setSupplierQ] = useState(initialSupplierQ);
+  const [supplierLoading, setSupplierLoading] = useState(false);
+  const [supplierDetailLoading, setSupplierDetailLoading] = useState(false);
+
+  const loadList = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [sm, ol] = await Promise.all([
+        procurementWorkbenchApi.summary(),
+        procurementWorkbenchApi.orders({ status: statusFilter, q, sortBy, page, pageSize: 20, startDate, endDate }),
+      ]);
+      setSummary(sm);
+      setOrderList(ol);
+      const firstId = ol.groups[0]?.items[0]?.orderId ?? null;
+      const selectedStillVisible = ol.groups.some((group) => group.items.some((item) => item.orderId === selectedId));
+      if (!selectedStillVisible) {
+        setSelectedId(firstId);
+      }
+    } catch {
+      setSummary(null);
+      setOrderList(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [statusFilter, q, sortBy, page, startDate, endDate, selectedId]);
+
+  useEffect(() => {
+    loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, q, sortBy, page, startDate, endDate]);
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    procurementWorkbenchApi
+      .workbench(selectedId)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch(() => {
+        if (!cancelled) setDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  // 当前选中的订单项（用于行内高亮 + 状态条）
+  const selectedItem = useMemo<WorkbenchOrderItem | null>(() => {
+    if (!orderList || selectedId === null) return null;
+    for (const g of orderList.groups) {
+      for (const it of g.items) {
+        if (it.orderId === selectedId) return it;
+      }
+    }
+    return null;
+  }, [orderList, selectedId]);
+
+  const totalPages = orderList ? Math.max(1, Math.ceil(orderList.total / orderList.pageSize)) : 1;
+
+  // 供应商列表：进入供应商视图或搜索时加载
+  useEffect(() => {
+    if (viewMode !== "suppliers") return;
+    let cancelled = false;
+    setSupplierLoading(true);
+    procurementWorkbenchApi
+      .suppliers(200)
+      .then((res) => {
+        if (cancelled) return;
+        setSupplierList(res.items);
+        // 默认选第一条
+        if (selectedSupplier === null && res.items.length > 0) {
+          setSelectedSupplier(res.items[0].supplierName);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSupplierList([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSupplierLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
+
+  // 供应商详情：选中供应商变化时加载
+  useEffect(() => {
+    if (viewMode !== "suppliers" || selectedSupplier === null) {
+      setSupplierDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setSupplierDetailLoading(true);
+    procurementWorkbenchApi
+      .supplierDetail(selectedSupplier)
+      .then((d) => {
+        if (!cancelled) setSupplierDetail(d);
+      })
+      .catch(() => {
+        if (!cancelled) setSupplierDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSupplierDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, selectedSupplier]);
+
+  // 供应商列表搜索过滤
+  const filteredSuppliers = useMemo<WorkbenchSupplierSummary[]>(() => {
+    if (!supplierList) return [];
+    if (!supplierQ.trim()) return supplierList;
+    const k = supplierQ.trim().toLowerCase();
+    return supplierList.filter((s) => s.supplierName.toLowerCase().includes(k));
+  }, [supplierList, supplierQ]);
+
+  async function runAutoMatch() {
+    setMatchBusy(true);
+    setActionMessage("");
+    try {
+      const result = await procurementChainApi.runMatch();
+      setActionMessage(`自动匹配完成：新增 ${result.created} 条关联，跳过 ${result.skipped} 条。`);
+      await loadList();
+    } catch (error) {
+      setActionMessage(error instanceof Error ? `自动匹配失败：${error.message}` : "自动匹配失败");
+    } finally {
+      setMatchBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-gray-50">
+      {/* 顶栏 */}
+      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 px-6 py-3 backdrop-blur">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="h-4 w-1 rounded-full bg-indigo-600" />
+            <div>
+              <h1 className="text-[15px] font-semibold tracking-tight text-gray-900">采购工作台</h1>
+              <p className="mt-0.5 text-[11px] text-gray-400">
+                以订单时间为主线，高效推进 1688 → 吉客云采购单 → 入库 → 发票全流程
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* 视图切换：订单视图（默认，按订单时间）/ 供应商视图（按 1688 卖家聚合） */}
+            <div className="flex items-center rounded-lg border border-gray-200 bg-white p-0.5 text-xs">
+              <button
+                onClick={() => {
+                  setViewMode("orders");
+                  const sp = new URLSearchParams(searchParams.toString());
+                  sp.delete("view");
+                  sp.delete("q");
+                  router.replace(`${workbenchPath}${sp.size ? "?" + sp.toString() : ""}`);
+                }}
+                className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                  viewMode === "orders" ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-50"
+                }`}
+              >
+                订单视图
+              </button>
+              <button
+                onClick={() => {
+                  setViewMode("suppliers");
+                  const sp = new URLSearchParams(
+                    supplierQ.trim()
+                      ? { view: "suppliers", q: supplierQ.trim() }
+                      : { view: "suppliers" }
+                  );
+                  router.replace(`${workbenchPath}?${sp.toString()}`);
+                }}
+                className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
+                  viewMode === "suppliers" ? "bg-gray-900 text-white" : "text-gray-500 hover:bg-gray-50"
+                }`}
+              >
+                供应商视图
+              </button>
+            </div>
+            <Link
+              href="/data-center-import?tab=alibaba1688"
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+            >
+              导入 1688 订单
+            </Link>
+            <Link
+              href="/data-center-import?tab=alibaba1688"
+              className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+              title="进入 1688 文件导入/同步入口；未配置官方 OAuth 时不会伪造成功"
+            >
+              立即同步
+            </Link>
+            <button
+              onClick={() => void runAutoMatch()}
+              disabled={matchBusy}
+              className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-50"
+            >
+              {matchBusy ? "匹配中…" : "自动匹配"}
+            </button>
+            <button
+              onClick={loadList}
+              disabled={loading}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            >
+              {loading ? "刷新中…" : "刷新"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-[1440px] flex-1 space-y-4 px-6 py-4">
+        {/* 工作台 KPI：只保留需要处理的六项待办，不把供应商统计混入主视图。 */}
+        <section className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+          {[
+            { key: "newOrders", label: "新订单", value: summary?.newOrders ?? "—", tone: "indigo" },
+            { key: "pendingSku", label: "待匹配 SKU", value: summary?.pendingSku ?? "—", tone: "violet" },
+            { key: "pendingPo", label: "待生成采购单", value: summary?.pendingPo ?? "—", tone: "amber" },
+            { key: "pendingInbound", label: "已到货待入库", value: summary?.pendingInbound ?? "—", tone: "teal" },
+            { key: "pendingInvoice", label: "待开票", value: summary?.pendingInvoice ?? "—", tone: "rose" },
+            { key: "exceptionCount", label: "异常数", value: summary?.exceptionCount ?? "—", tone: "red" },
+          ].map((card) => (
+            <div key={card.key} className="rounded-xl border border-gray-200 bg-white px-3.5 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-gray-400">{card.label}</span>
+                <span className={`h-2 w-2 rounded-full ${KPI_DOT[card.tone]}`} />
+              </div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums leading-7 text-gray-900">{card.value}</div>
+            </div>
+          ))}
+        </section>
+        {actionMessage && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            {actionMessage}
+          </div>
+        )}
+
+        {/* 下方两栏：根据 viewMode 切换订单视图 / 供应商视图 */}
+        {viewMode === "orders" ? (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          {/* 左：订单队列 */}
+          <section className="lg:col-span-4">
+            <div className="rounded-xl border border-gray-200 bg-white">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="h-3.5 w-1 rounded-full bg-indigo-600" />
+                  <h2 className="text-sm font-medium text-gray-800">1688 订单队列</h2>
+                  {orderList && (
+                    <span className="text-[11px] text-gray-400">共 {orderList.total} 条</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {(
+                    [
+                      { k: "all", l: "全部" },
+                      { k: "pending", l: "待处理" },
+                      { k: "done", l: "已完成" },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.k}
+                      onClick={() => {
+                        setStatusFilter(f.k);
+                        setPage(1);
+                      }}
+                      className={`rounded-lg px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                        statusFilter === f.k
+                          ? "bg-gray-900 text-white"
+                          : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                      }`}
+                    >
+                      {f.l}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-2">
+                <div className="relative flex-1">
+                  <input
+                    value={q}
+                    onChange={(e) => {
+                      setQ(e.target.value);
+                      setPage(1);
+                    }}
+                    placeholder="按订单号 / 供应商搜索"
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 placeholder:text-gray-400 focus:border-indigo-300 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value as "date" | "amount" | "status");
+                    setPage(1);
+                  }}
+                  className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 outline-none focus:border-indigo-300"
+                >
+                  <option value="date">按时间</option>
+                  <option value="amount">按金额</option>
+                  <option value="status">按状态</option>
+                </select>
+              </div>
+
+              <div className="max-h-[640px] overflow-y-auto">
+                {loading && !orderList && (
+                  <div className="flex items-center justify-center px-3 py-12 text-xs text-gray-400">
+                    <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-200 border-t-indigo-500" />
+                    加载中…
+                  </div>
+                )}
+                {orderList && orderList.groups.length === 0 && (
+                  <div className="px-6 py-12 text-center text-xs text-gray-400">
+                    没有匹配的订单
+                  </div>
+                )}
+                {orderList?.groups.map((g) => (
+                  <div key={g.label}>
+                    <div className="sticky top-0 z-[1] border-y border-gray-100 bg-gray-50/95 px-3 py-1 text-[11px] font-medium text-gray-500 backdrop-blur">
+                      {g.label} <span className="ml-1 text-gray-300">· {g.items.length} 条</span>
+                    </div>
+                    <ul>
+                      {g.items.map((it) => {
+                        const active = it.orderId === selectedId;
+                        const dim = it.firstUndoneDimension;
+                        return (
+                          <li key={it.orderId}>
+                            <button
+                              onClick={() => setSelectedId(it.orderId)}
+                              className={`flex w-full items-center gap-3 border-b border-gray-50 px-3 py-2 text-left transition-colors last:border-0 ${
+                                active
+                                  ? "border-l-2 border-indigo-500 bg-indigo-50/60"
+                                  : "hover:bg-gray-50"
+                              }`}
+                            >
+                              <div className="w-11 shrink-0 text-[12px] tabular-nums text-gray-500">
+                                {fmtClock(it.orderDate)}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${DIM_DOT[dim]}`} />
+                                  <span className="truncate text-[12.5px] font-medium text-gray-800" title={it.supplier}>
+                                    {it.supplier || "—"}
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 truncate font-mono text-[10.5px] text-gray-400">
+                                  {it.orderNo}
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 flex-col items-end gap-1">
+                                <span className="text-[12px] font-semibold tabular-nums text-gray-700">
+                                  {fmtMoney(it.amount)}
+                                </span>
+                                <span
+                                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                                    it.firstUndone
+                                      ? "bg-amber-50 text-amber-700"
+                                      : "bg-emerald-50 text-emerald-700"
+                                  }`}
+                                >
+                                  {it.firstUndone ? it.firstUndoneShort : "已完成"}
+                                </span>
+                              </div>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+
+              {/* 分页 */}
+              {orderList && totalPages > 1 && (
+                <div className="flex items-center justify-between border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500">
+                  <span>
+                    第 {orderList.page} / {totalPages} 页
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page <= 1}
+                      className="rounded-md border border-gray-200 bg-white px-2 py-0.5 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      ‹ 上一页
+                    </button>
+                    <button
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={page >= totalPages}
+                      className="rounded-md border border-gray-200 bg-white px-2 py-0.5 hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      下一页 ›
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* 右：工作面板 */}
+          <section className="lg:col-span-8">
+            <div className="rounded-xl border border-gray-200 bg-white">
+              {detailLoading && !detail && (
+                <div className="flex items-center justify-center px-6 py-16 text-xs text-gray-400">
+                  <span className="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-indigo-500" />
+                  加载订单工作面板…
+                </div>
+              )}
+              {!selectedId && !detailLoading && (
+                <div className="px-6 py-16 text-center text-xs text-gray-400">
+                  从左侧选一笔 1688 订单开始执行采购流程
+                </div>
+              )}
+              {detail && <WorkbenchPanel detail={detail} />}
+            </div>
+          </section>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            {/* 左：供应商列表 */}
+            <section className="lg:col-span-4">
+              <div className="rounded-xl border border-gray-200 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3.5 w-1 rounded-full bg-violet-500" />
+                    <h2 className="text-sm font-medium text-gray-800">供应商聚合</h2>
+                    {supplierList && (
+                      <span className="text-[11px] text-gray-400">共 {supplierList.length} 家</span>
+                    )}
+                  </div>
+                </div>
+                <div className="px-3 py-2">
+                  <input
+                    value={supplierQ}
+                    onChange={(e) => setSupplierQ(e.target.value)}
+                    placeholder="按供应商名搜索"
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 placeholder:text-gray-400 focus:border-violet-300 focus:bg-white focus:outline-none"
+                  />
+                </div>
+                <div className="max-h-[680px] overflow-y-auto">
+                  {supplierLoading && !supplierList && (
+                    <div className="flex items-center justify-center px-3 py-12 text-xs text-gray-400">
+                      <span className="mr-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-gray-200 border-t-violet-500" />
+                      加载中…
+                    </div>
+                  )}
+                  {supplierList && filteredSuppliers.length === 0 && (
+                    <div className="px-6 py-12 text-center text-xs text-gray-400">没有匹配的供应商</div>
+                  )}
+                  <ul>
+                    {filteredSuppliers.map((s) => {
+                      const active = s.supplierName === selectedSupplier;
+                      return (
+                        <li key={s.supplierName}>
+                          <button
+                            onClick={() => setSelectedSupplier(s.supplierName)}
+                            className={`flex w-full items-start gap-2 border-b border-gray-50 px-3 py-2.5 text-left transition-colors last:border-0 ${
+                              active ? "border-l-2 border-violet-500 bg-violet-50/60" : "hover:bg-gray-50"
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[12.5px] font-medium text-gray-800" title={s.supplierName}>
+                                {s.supplierName}
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-3 text-[11px]">
+                                <span className="text-gray-400">{s.orderCount} 单</span>
+                                <span className="font-semibold tabular-nums text-gray-700">{fmtMoney(s.totalPurchase)}</span>
+                              </div>
+                              {(s.uninvoiced > 0 || s.uninbound > 0) && (
+                                <div className="mt-1 flex items-center gap-2 text-[10.5px]">
+                                  {s.uninvoiced > 0 && (
+                                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">
+                                      待开票 {fmtMoney(s.uninvoiced)}
+                                    </span>
+                                  )}
+                                  {s.uninbound > 0 && (
+                                    <span className="rounded bg-rose-50 px-1.5 py-0.5 text-rose-700">
+                                      未入库 {fmtMoney(s.uninbound)}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </div>
+            </section>
+
+            {/* 右：供应商详情 */}
+            <section className="lg:col-span-8">
+              <div className="rounded-xl border border-gray-200 bg-white">
+                {supplierDetailLoading && !supplierDetail && (
+                  <div className="flex items-center justify-center px-6 py-16 text-xs text-gray-400">
+                    <span className="mr-2 inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-200 border-t-violet-500" />
+                    加载供应商详情…
+                  </div>
+                )}
+                {!selectedSupplier && !supplierDetailLoading && (
+                  <div className="px-6 py-16 text-center text-xs text-gray-400">从左侧选一家供应商查看合作历史</div>
+                )}
+                {supplierDetail && <SupplierPanel detail={supplierDetail} />}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepCard({
+  step,
+  state,
+  children,
+}: {
+  step: WorkbenchStep;
+  state: WorkbenchStepState | undefined;
+  children: ReactNode;
+}) {
+  const done = state?.done ?? false;
+  return (
+    <div className="border-b border-gray-100 px-4 py-3 last:border-0">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-medium ${
+              done ? "bg-emerald-500 text-white" : "bg-gray-200 text-gray-600"
+            }`}
+          >
+            {done ? "✓" : step.no}
+          </span>
+          <span className={`inline-block h-1.5 w-1.5 rounded-full ${DIM_DOT[step.dimension]}`} />
+          <h3 className="text-sm font-medium text-gray-800">{step.label}</h3>
+          {state?.detail && (
+            <span className={`text-[11px] ${done ? "text-emerald-600" : "text-gray-500"}`}>
+              · {state.detail}
+            </span>
+          )}
+        </div>
+        <Link
+          href={step.href}
+          className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-500 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+        >
+          {step.act} →
+        </Link>
+      </div>
+      <div className="mt-2 pl-8">{children}</div>
+    </div>
+  );
+}
+
+const PANEL_STEPS: WorkbenchStep[] = [
+  { key: "order", no: 1, label: "1688 订单信息", short: "1688", dimension: "1688", href: "/alibaba1688-import", act: "去 1688 订单导入" },
+  { key: "content", no: 2, label: "实际采购内容", short: "采购内容", dimension: "purchase", href: "/purchase", act: "去采购中心细化" },
+  { key: "sku", no: 3, label: "费用分配", short: "选货品", dimension: "purchase", href: "/purchase", act: "去采购中心关联 SKU" },
+  { key: "jackyun_po", no: 4, label: "吉客云采购单", short: "采购单", dimension: "jackyun", href: "/jackyun-import", act: "导入吉客云采购单" },
+  { key: "closeout", no: 5, label: "入库 / 发票 / 税务", short: "入库发票", dimension: "jackyun", href: "/jackyun-import", act: "查看入库发票" },
+];
+
+function WorkbenchPanel({ detail }: { detail: WorkbenchDetail }) {
+  const o = detail.order;
+  return (
+    <div>
+      {/* 订单头部 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50/40 px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-gray-400">当前订单</span>
+            <span className="font-mono text-[13px] font-medium text-gray-800">{o.orderNo}</span>
+            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-700">
+              等待执行
+            </span>
+          </div>
+          <div className="mt-0.5 text-[11px] text-gray-400">
+            最后同步：{fmtDate(o.orderDate)} <span className="mx-1 text-gray-300">·</span>{" "}
+            金额：<span className="font-semibold tabular-nums text-gray-700">{fmtMoney(o.amount)}</span>
+          </div>
+        </div>
+        <Link
+          href={`/procurement-chain/detail?id=${o.orderId}`}
+          className="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 transition-colors hover:bg-indigo-100"
+          title="切换到按链路完成度追踪的 7 环节视图"
+        >
+          链路完成度 →
+        </Link>
+      </div>
+
+      {/* 5 步卡片 */}
+      {PANEL_STEPS.map((s) => (
+        <StepCard key={s.key} step={s} state={detail.stepStates[s.key]}>
+          <PanelBody stepKey={s.key} detail={detail} />
+        </StepCard>
+      ))}
+
+      {/* 供应商历史 + 复购提示 */}
+      {detail.supplierHistory && detail.order.supplier && (
+        <SupplierHistoryCard
+          history={detail.supplierHistory}
+          currentOrderId={o.orderId}
+          supplierName={detail.order.supplier}
+        />
+      )}
+    </div>
+  );
+}
+
+function PanelBody({ stepKey, detail }: { stepKey: string; detail: WorkbenchDetail }) {
+  switch (stepKey) {
+    case "order":
+      return (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm md:grid-cols-4">
+          <Field label="供应商" value={detail.order.supplier} />
+          <Field label="订单号" value={detail.order.orderNo} mono />
+          <Field label="支付时间" value={fmtDate(detail.order.orderDate)} />
+          <Field label="采购金额" value={fmtMoney(detail.order.amount)} strong />
+          <Field label="买家" value={detail.order.buyer} />
+          <Field label="商品标题" value={detail.order.title} truncate />
+          <Field label="订单状态" value={detail.order.orderStatus || "—"} />
+        </div>
+      );
+    case "content": {
+      const allocs = detail.detail.allocations as Array<{
+        goodsName?: string;
+        skuCode?: string;
+        quantity?: number;
+        unitPrice?: number;
+        amount?: number;
+      }>;
+      if (allocs.length === 0) {
+        return (
+          <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12px] text-gray-500">
+            尚未细化实际采购内容；点击右上角「去采购中心细化」把 1688 订单拆成具体 SKU（商品 / 数量 / 单价 / 金额）。
+          </div>
+        );
+      }
+      const subtotal = allocs.reduce((s, a) => s + (a.amount || 0), 0);
+      return (
+        <div>
+          <table className="w-full text-[12px]">
+            <thead className="text-[10.5px] text-gray-400">
+              <tr className="border-b border-gray-100">
+                <th className="py-1 text-left font-medium">实际内容</th>
+                <th className="py-1 text-left font-medium">SKU 编码</th>
+                <th className="py-1 text-right font-medium">数量</th>
+                <th className="py-1 text-right font-medium">单价</th>
+                <th className="py-1 text-right font-medium">金额</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allocs.map((a, i) => (
+                <tr key={i} className="border-b border-gray-50">
+                  <td className="py-1.5 text-gray-700">{a.goodsName || "—"}</td>
+                  <td className="py-1.5 font-mono text-[11px] text-violet-600">{a.skuCode || "—"}</td>
+                  <td className="py-1.5 text-right tabular-nums">{a.quantity ?? "—"}</td>
+                  <td className="py-1.5 text-right tabular-nums">{fmtMoney(a.unitPrice)}</td>
+                  <td className="py-1.5 text-right font-semibold tabular-nums text-gray-800">{fmtMoney(a.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-1.5 flex items-center justify-between text-[11px]">
+            <span className="text-gray-400">商品金额小计</span>
+            <span className="font-semibold tabular-nums text-gray-800">{fmtMoney(subtotal)}</span>
+          </div>
+        </div>
+      );
+    }
+    case "sku": {
+      const allocs = detail.detail.allocations as Array<{ skuId?: number; goodsName?: string; skuCode?: string }>;
+      const total = allocs.length;
+      const linked = allocs.filter((a) => a.skuId).length;
+      const unallocated = detail.detail.unallocatedAmount;
+      if (total === 0) {
+        return (
+          <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12px] text-gray-500">
+            先在上一步细化采购内容（SKU / 数量），再到采购中心关联吉客云货品。
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-[12px]">
+            <span className="text-gray-500">已关联吉客云 SKU</span>
+            <span className="font-semibold tabular-nums text-gray-800">
+              {linked} / {total}
+            </span>
+          </div>
+          {unallocated !== null && Math.abs(unallocated) > 0.009 && (
+            <div className="flex items-center justify-between rounded-md bg-amber-50 px-3 py-1.5 text-[11px] text-amber-700">
+              <span>
+                {unallocated > 0 ? "付款金额中尚未分配到 SKU" : "SKU 分配金额超出付款金额"}
+              </span>
+              <span className="font-semibold tabular-nums">{fmtMoney(Math.abs(unallocated))}</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "jackyun_po": {
+      const pos = detail.detail.purchaseOrders as Array<{
+        purchNo?: string;
+        amount?: number;
+        status?: string;
+        supplierName?: string;
+      }>;
+      if (pos.length === 0) {
+        return (
+          <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12px] text-gray-500">
+            尚未在吉客云生成采购单；点击「导入吉客云采购单」可手动创建或关联已有采购单。
+          </div>
+        );
+      }
+      return (
+        <ul className="space-y-1.5">
+          {pos.map((p, i) => (
+            <li
+              key={i}
+              className="flex items-center justify-between gap-2 rounded-md bg-teal-50/60 px-3 py-1.5 text-[12px]"
+            >
+              <div>
+                <span className="font-medium text-gray-800">{p.purchNo}</span>
+                {p.supplierName && <span className="ml-2 text-[11px] text-gray-400">{p.supplierName}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold tabular-nums text-gray-700">{fmtMoney(p.amount)}</span>
+                {p.status && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10.5px] text-teal-600">{p.status}</span>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    case "closeout": {
+      const inbound = (detail.detail.inbound as unknown[]).length;
+      const invoice = (detail.detail.invoice as unknown[]).length;
+      const settlement = detail.detail.settlement as Array<{ paid?: boolean }>;
+      const paid = settlement.some((s) => s.paid);
+      return (
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <StatusTile label="入库状态" value={inbound > 0 ? `已入库 ${inbound} 单` : "未入库"} tone={inbound > 0 ? "ok" : "warn"} />
+          <StatusTile label="发票状态" value={invoice > 0 ? `已收票 ${invoice} 张` : "未记录"} tone={invoice > 0 ? "ok" : "warn"} />
+          <StatusTile label="付款状态" value={paid ? "已付款" : "未付款"} tone={paid ? "ok" : "warn"} />
+          <StatusTile
+            label="税务状态"
+            value={detail.stepStates.closeout?.done ? "已认证" : "未认证"}
+            tone={detail.stepStates.closeout?.done ? "ok" : "warn"}
+          />
+        </div>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+function Field({
+  label,
+  value,
+  mono,
+  strong,
+  truncate,
+}: {
+  label: string;
+  value: string | null | undefined;
+  mono?: boolean;
+  strong?: boolean;
+  truncate?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10.5px] text-gray-400">{label}</div>
+      <div
+        className={`mt-0.5 ${mono ? "font-mono" : ""} ${strong ? "text-[15px] font-semibold" : "text-[12.5px]"} text-gray-700 ${
+          truncate ? "truncate" : ""
+        }`}
+        title={value || ""}
+      >
+        {value || "—"}
+      </div>
+    </div>
+  );
+}
+
+function StatusTile({ label, value, tone }: { label: string; value: string; tone: "ok" | "warn" }) {
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 ${
+        tone === "ok" ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/60"
+      }`}
+    >
+      <div className={`text-[10.5px] ${tone === "ok" ? "text-emerald-600" : "text-amber-600"}`}>
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 text-[12.5px] font-medium ${
+          tone === "ok" ? "text-emerald-800" : "text-amber-700"
+        }`}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+// ---------- 供应商视图右栏：合作历史 + 常购 SKU + 最近订单 ----------
+
+function SupplierPanel({ detail }: { detail: WorkbenchSupplierDetail }) {
+  return (
+    <div>
+      {/* 供应商头部 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50/40 px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-gray-400">供应商</span>
+            <span className="text-[14px] font-semibold text-gray-900">{detail.supplierName}</span>
+          </div>
+          <div className="mt-0.5 text-[11px] text-gray-400">
+            最近下单：{fmtDate(detail.lastOrderDate)} <span className="mx-1 text-gray-300">·</span>{" "}
+            累计 <span className="font-semibold tabular-nums text-gray-700">{detail.orderCount} 单</span>{" "}
+            / <span className="font-semibold tabular-nums text-gray-700">{fmtMoney(detail.totalPurchase)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 张指标卡：合作 / 已开票 / 未开票 / 未入库 */}
+      <div className="grid grid-cols-2 gap-2 border-b border-gray-100 px-4 py-3 md:grid-cols-4">
+        <Stat label="合作订单数" value={`${detail.orderCount} 单`} sub={fmtMoney(detail.totalPurchase)} />
+        <Stat label="累计采购额" value={fmtMoney(detail.totalPurchase)} sub="历史合计" />
+        <Stat
+          label="未开票金额"
+          value={fmtMoney(detail.uninvoiced)}
+          sub={detail.uninvoiced > 0 ? "需催发票" : "已结清"}
+          tone={detail.uninvoiced > 0 ? "warn" : "ok"}
+        />
+        <Stat
+          label="未入库金额"
+          value={fmtMoney(detail.uninbound ?? 0)}
+          sub={detail.uninbound > 0 ? "需跟入库" : "已入库"}
+          tone={detail.uninbound > 0 ? "warn" : "ok"}
+        />
+      </div>
+
+      {/* 常购 SKU Top 5（复购提示：上一笔订单买过的 SKU 自动带上） */}
+      <div className="border-b border-gray-100 px-4 py-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-[11px] font-medium text-gray-700">常购 SKU</span>
+          <span className="text-[10.5px] text-gray-400">按历史采购次数降序</span>
+        </div>
+        {detail.oftenSkus.length === 0 ? (
+          <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12px] text-gray-500">
+            暂无 SKU 分配记录：把任意订单的采购内容细化分配吉客云 SKU 后，会自动统计到此处。
+          </div>
+        ) : (
+          <ul className="space-y-1.5">
+            {detail.oftenSkus.slice(0, 5).map((sk, i) => (
+              <li
+                key={sk.skuCode}
+                className="flex items-center justify-between gap-3 rounded-md bg-violet-50/40 px-3 py-1.5 text-[12px]"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-violet-500" />
+                  <span className="font-mono text-[10.5px] text-violet-600">{sk.skuCode}</span>
+                  <span className="truncate text-gray-700" title={sk.goodsName}>
+                    {sk.goodsName || "—"}
+                  </span>
+                </div>
+                <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10.5px] font-medium text-violet-600">
+                  {sk.count} 次
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* 最近订单 5 单（点击可跳转到工作面板） */}
+      <div className="px-4 py-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-[11px] font-medium text-gray-700">最近订单</span>
+          <span className="text-[10.5px] text-gray-400">按订单时间倒序 · 点击进入工作面板</span>
+        </div>
+        {detail.recentOrders.length === 0 ? (
+          <div className="rounded-lg bg-gray-50 px-3 py-3 text-[12px] text-gray-500">暂无订单记录。</div>
+        ) : (
+          <ul className="space-y-1.5">
+            {detail.recentOrders.slice(0, 5).map((o) => (
+              <li
+                key={o.orderId}
+                className="flex items-center justify-between gap-3 rounded-md border border-gray-100 bg-white px-3 py-1.5 text-[12px] hover:border-violet-200 hover:bg-violet-50/40"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[11px] text-gray-700">{o.orderNo}</span>
+                    <span className="text-[10.5px] text-gray-400">{fmtDate(o.orderDate)}</span>
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-gray-500">{o.title || "—"}</div>
+                </div>
+                <span className="shrink-0 font-semibold tabular-nums text-gray-800">{fmtMoney(o.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "ok" | "warn";
+}) {
+  const toneCls = tone === "warn" ? "text-amber-700" : tone === "ok" ? "text-emerald-700" : "text-gray-700";
+  return (
+    <div className="rounded-lg border border-gray-100 bg-white px-3 py-2">
+      <div className="text-[10.5px] text-gray-400">{label}</div>
+      <div className={`mt-0.5 text-[13px] font-semibold tabular-nums ${toneCls}`}>{value}</div>
+      {sub && <div className="mt-0.5 text-[10.5px] text-gray-400">{sub}</div>}
+    </div>
+  );
+}
+
+// ---------- 订单视图右栏底部：供应商历史 + 复购提示 ----------
+
+function SupplierHistoryCard({
+  history,
+  currentOrderId,
+  supplierName,
+}: {
+  history: NonNullable<WorkbenchDetail["supplierHistory"]>;
+  currentOrderId: number;
+  supplierName: string;
+}) {
+  const recent = history.recentOrders.filter((o) => o.orderId !== currentOrderId);
+  return (
+    <div className="border-b border-gray-100 bg-violet-50/30 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-violet-500" />
+          <h3 className="text-sm font-medium text-gray-800">该供应商历史 · {supplierName}</h3>
+          <span className="text-[11px] text-gray-400">
+            累计 {history.orderCount} 单 · {fmtMoney(history.totalPurchase)} · 待开票 {fmtMoney(history.uninvoiced)}
+          </span>
+        </div>
+        <Link
+          href={`/procurement-workbench?view=suppliers&q=${encodeURIComponent(supplierName)}`}
+          className="rounded-md border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-600 transition-colors hover:bg-violet-50"
+          title="在供应商视图查看完整合作历史与常购 SKU"
+        >
+          供应商视图 →
+        </Link>
+      </div>
+
+      {/* 复购提示：上一笔订单买过的 SKU 自动勾选建议 */}
+      {history.oftenSkus.length > 0 && (
+        <div className="mt-2 rounded-md border border-violet-100 bg-white px-3 py-2">
+          <div className="text-[10.5px] font-medium text-violet-600">复购提示 · 该供应商常购 SKU（点击复制编码）</div>
+          <ul className="mt-1.5 space-y-1">
+            {history.oftenSkus.slice(0, 5).map((sk) => (
+              <li key={sk.skuCode} className="flex items-center gap-2 text-[11.5px]">
+                <input
+                  type="checkbox"
+                  defaultChecked
+                  className="h-3 w-3 accent-violet-500"
+                  aria-label={`复购 ${sk.skuCode}`}
+                />
+                <span className="font-mono text-[10.5px] text-violet-600">{sk.skuCode}</span>
+                <span className="truncate text-gray-700" title={sk.goodsName}>
+                  {sk.goodsName || "—"}
+                </span>
+                <span className="ml-auto text-[10.5px] text-gray-400">{sk.count} 次</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {recent.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[10.5px] font-medium text-gray-500">最近订单</div>
+          <ul className="grid grid-cols-1 gap-1 md:grid-cols-2">
+            {recent.slice(0, 4).map((o) => (
+              <li
+                key={o.orderId}
+                className="flex items-center justify-between rounded-md bg-white px-2.5 py-1.5 text-[11px]"
+              >
+                <span className="font-mono text-gray-700">{o.orderNo}</span>
+                <span className="text-gray-400">{fmtDate(o.orderDate)}</span>
+                <span className="font-semibold tabular-nums text-gray-800">{fmtMoney(o.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}

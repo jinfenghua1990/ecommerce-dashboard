@@ -22,3 +22,6 @@ next-env.d.ts
 
 # 运维产物
 backups/
+
+# 业务数据快照（不进公开仓库）
+backend/backup_*.json

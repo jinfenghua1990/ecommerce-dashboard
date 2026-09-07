@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { automationApi, ScheduleItem, SyncJobRow, SyncLogRow } from "@/lib/api";
+import { automationApi, jkyOrderApi, JkyOrderStatus, ScheduleItem, SyncJobRow, SyncLogRow } from "@/lib/api";
 
 const STATUS_STYLE: Record<string, string> = {
   running: "bg-indigo-50 text-indigo-700",
@@ -16,7 +16,8 @@ const JOB_TYPE_LABEL: Record<string, string> = {
   sales: "订单/售后", online_orders: "线上订单", aftersales: "售后", inventory: "库存",
   products: "商品/SKU", price_lists: "价格", warehouses: "仓库",
   purchase: "采购", purchase_settlements: "采购结算", purchase_returns: "采购退货",
-  inbound: "入库", outbound: "出库", connection_test: "连接测试", orders: "1688订单",
+  inbound: "入库", outbound: "出库", stock_allocations: "库存调拨", shop_orders: "网店订单/发货",
+  connection_test: "连接测试", orders: "吉客云销售订单",
 };
 
 export default function AutomationPage() {
@@ -24,26 +25,99 @@ export default function AutomationPage() {
   const [jobs, setJobs] = useState<SyncJobRow[]>([]);
   const [logs, setLogs] = useState<SyncLogRow[]>([]);
   const [err, setErr] = useState("");
+  const [message, setMessage] = useState("");
+  const [running, setRunning] = useState("");
+  const [jkyOrderStatus, setJkyOrderStatus] = useState<JkyOrderStatus | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([automationApi.schedule(), automationApi.jobs(30), automationApi.logs(80)])
-      .then(([s, j, l]) => {
+    Promise.all([automationApi.schedule(), automationApi.jobs(30), automationApi.logs(80), jkyOrderApi.status()])
+      .then(([s, j, l, orderStatus]) => {
         setSchedule(s.items);
         setJobs(j);
         setLogs(l);
+        setJkyOrderStatus(orderStatus);
       })
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(load, [load]);
 
+  async function runJkyOrders() {
+    const runKey = "tasks.sync_jky_orders-";
+    setRunning(runKey);
+    setMessage("");
+    try {
+      await automationApi.runJkyOrders();
+      setMessage("吉客云订单三通道同步已加入队列；结果以最近同步任务为准");
+      window.setTimeout(load, 1200);
+    } catch (e) {
+      setMessage(`加入队列失败：${String(e)}`);
+    } finally {
+      setRunning("");
+    }
+  }
+
+  async function runNow(item: ScheduleItem) {
+    if (item.task === "tasks.sync_jky_orders") {
+      await runJkyOrders();
+      return;
+    }
+    setRunning(`${item.task}-${item.args}`);
+    setMessage("");
+    try {
+      if (item.task === "tasks.sync_jackyun") {
+        await automationApi.runJackyun(item.args);
+      } else if (item.task === "tasks.sync_1688") {
+        await automationApi.run1688();
+      } else {
+        return;
+      }
+      setMessage(`${item.label} 已加入队列；结果以最近同步任务为准`);
+      window.setTimeout(load, 1200);
+    } catch (e) {
+      setMessage(`加入队列失败：${String(e)}`);
+    } finally {
+      setRunning("");
+    }
+  }
+
   return (
     <div>
       <h1 className="text-xl font-semibold">自动化</h1>
       <p className="mt-1 text-sm text-gray-400">
-        Celery Beat 定时同步。所有外部同步仅在凭证配置后真正执行；未配置如实跳过（见同步日志）。频率后台可配置列入下一迭代。
+        Celery Beat 定时同步。所有外部同步仅在凭证配置后真正执行；未配置如实跳过（见同步日志）。吉客云订单按配置自动故障切换。
       </p>
 
       {err && <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{err}</div>}
+      {message && <div className="mt-4 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-700">{message}</div>}
+
+      <section className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-medium text-gray-700">吉客云订单获取中心</h2>
+            <p className="mt-1 text-xs text-gray-400">
+              优先级：{jkyOrderStatus?.providerPriority.join(" → ") || "jky_web → jky_rpa → jky_api"}；只推进成功且通过校验的同步游标。
+            </p>
+          </div>
+          <button
+            onClick={() => void runJkyOrders()}
+            disabled={Boolean(running)}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+          >
+            立即同步订单
+          </button>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {(jkyOrderStatus?.channels ?? []).map((channel) => (
+            <div key={channel.provider} className="rounded-lg border border-gray-100 bg-gray-50 p-2">
+              <div className="text-xs font-medium text-gray-700">{channel.label}</div>
+              <div className={`mt-1 text-xs ${channel.status === "connected" ? "text-emerald-600" : channel.configured ? "text-amber-600" : "text-gray-400"}`}>
+                {channel.status}{channel.verified ? " · 已验证" : " · 未验证"}
+              </div>
+              {channel.errorSummary && <div className="mt-1 truncate text-[10px] text-gray-400" title={channel.errorSummary}>{channel.errorSummary}</div>}
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
         <h2 className="text-sm font-medium text-gray-700">定时任务（beat schedule）</h2>
@@ -53,6 +127,7 @@ export default function AutomationPage() {
               <th className="py-2 font-medium">任务</th>
               <th className="py-2 font-medium">频率</th>
               <th className="py-2 font-medium">执行</th>
+              <th className="py-2 text-right font-medium">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -61,6 +136,17 @@ export default function AutomationPage() {
                 <td className="py-2 font-medium">{s.label}</td>
                 <td className="py-2 text-gray-500">{s.frequency}</td>
                 <td className="py-2 font-mono text-xs text-gray-400">{s.task}({s.args || ""})</td>
+                <td className="py-2 text-right">
+                  {(s.task === "tasks.sync_jky_orders" || s.task === "tasks.sync_jackyun" || s.task === "tasks.sync_1688") ? (
+                    <button
+                      onClick={() => runNow(s)}
+                      disabled={Boolean(running)}
+                      className="rounded-lg border border-indigo-200 px-2.5 py-1 text-xs text-indigo-600 disabled:opacity-40"
+                    >
+                      {running === `${s.task}-${s.args}` ? "排队中…" : "立即同步"}
+                    </button>
+                  ) : <span className="text-xs text-gray-300">自动</span>}
+                </td>
               </tr>
             ))}
           </tbody>

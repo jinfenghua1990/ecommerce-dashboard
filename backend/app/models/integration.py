@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,7 +15,7 @@ class IntegrationConnection(Base, PkMixin, TimestampMixin):
 
     provider: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     mode: Mapped[str] = mapped_column(String(64), default="")  # mcp / openapi / oauth / file / smtp
-    status: Mapped[str] = mapped_column(String(32), default="unconfigured")  # unconfigured/connected/error/available
+    status: Mapped[str] = mapped_column(String(32), default="unconfigured")  # unconfigured/transport_connected/connected/blocked/error/available
     phase: Mapped[int] = mapped_column(Integer, default=1)
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -37,6 +37,15 @@ class IntegrationCredential(Base, PkMixin, TimestampMixin):
 
 class SyncJob(Base, PkMixin, TimestampMixin):
     __tablename__ = "sync_jobs"
+    __table_args__ = (
+        Index(
+            "uq_jky_order_sync_running",
+            "provider",
+            "job_type",
+            unique=True,
+            postgresql_where=text("provider = 'jky_order' AND job_type = 'orders' AND status = 'running'"),
+        ),
+    )
 
     provider: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -72,6 +81,7 @@ class RawApiPayload(Base, PkMixin):
     """第一次请求保留 raw payload（规格 5）。"""
 
     __tablename__ = "raw_api_payloads"
+    __table_args__ = (UniqueConstraint("provider", "request_digest", name="uq_raw_payload_provider_digest"),)
 
     provider: Mapped[str] = mapped_column(String(64), index=True)
     method: Mapped[str] = mapped_column(String(128), default="")

@@ -1,0 +1,109 @@
+"""税务发票清单的原件、标准台账和业务关联。"""
+
+from datetime import datetime
+from decimal import Decimal
+
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base, PkMixin, TimestampMixin
+
+MONEY = Numeric(18, 4)
+
+
+class TaxInvoiceImport(Base, PkMixin, TimestampMixin):
+    """一次官方税务清单导入；原文件按 SHA256 幂等保存。"""
+
+    __tablename__ = "tax_invoice_imports"
+    __table_args__ = (UniqueConstraint("sha256", name="uq_tax_invoice_import_sha256"),)
+
+    original_name: Mapped[str] = mapped_column(Text, nullable=False)
+    stored_path: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size: Mapped[int] = mapped_column(BigInteger, default=0)
+    mime: Mapped[str] = mapped_column(String(128), default="")
+    source_system: Mapped[str] = mapped_column(String(64), default="tax_export", index=True)
+    period_year: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    period_month: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    sheet_name: Mapped[str] = mapped_column(String(256), default="")
+    headers: Mapped[list] = mapped_column(JSONB, default=list)
+    mapping: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="parsed", index=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    recognized_row_count: Mapped[int] = mapped_column(Integer, default=0)
+    matched_row_count: Mapped[int] = mapped_column(Integer, default=0)
+    needs_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_summary: Mapped[str] = mapped_column(Text, default="")
+    uploader: Mapped[str] = mapped_column(String(64), default="system")
+    # 导入生命周期：draft=解析完毕待人工确认，active=确认后出现在业务页，deleted=软删除（可恢复）。
+    lifecycle: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    lifecycle_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaxInvoiceImportRecord(Base, PkMixin):
+    """导入批次中的原始行；即使无法识别，也不能丢失。"""
+
+    __tablename__ = "tax_invoice_import_records"
+    __table_args__ = (UniqueConstraint("import_id", "row_index", name="uq_tax_invoice_import_record"),)
+
+    import_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    row_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    recognition_status: Mapped[str] = mapped_column(String(32), default="needs_review", index=True)
+    invoice_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
+    error_summary: Mapped[str] = mapped_column(Text, default="")
+    # 行级状态：active=保留；deleted=用户在明细核对中删除的行（可恢复，其发票同步从台账隐藏）。
+    row_status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", index=True)
+
+
+class TaxInvoice(Base, PkMixin, TimestampMixin):
+    """标准税务发票台账；同一发票代码+号码跨批次只保留一条。"""
+
+    __tablename__ = "tax_invoices"
+    __table_args__ = (UniqueConstraint("invoice_key", name="uq_tax_invoice_key"),)
+
+    invoice_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), default="unknown", index=True)  # input/output/unknown
+    invoice_code: Mapped[str] = mapped_column(String(64), default="", index=True)
+    invoice_number: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    invoice_type: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(32), default="unknown", index=True)  # issued/void/red/unknown
+    issue_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    seller_name: Mapped[str] = mapped_column(String(256), default="", index=True)
+    seller_tax_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    buyer_name: Mapped[str] = mapped_column(String(256), default="", index=True)
+    buyer_tax_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    amount_excl_tax: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    tax_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    total_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    currency: Mapped[str] = mapped_column(String(8), default="CNY")
+    source_system: Mapped[str] = mapped_column(String(64), default="tax_export", index=True)
+    source_import_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
+    source_row_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    match_status: Mapped[str] = mapped_column(String(32), default="unmatched", index=True)  # matched/unmatched/needs_review
+    match_note: Mapped[str] = mapped_column(Text, default="")
+    # 税务认证（勾选抵扣）：true=已认证抵扣，false=未认证；verified_month 记录认证所属月份，如 2026-08
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    verified_month: Mapped[str] = mapped_column(String(16), default="")
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class TaxInvoiceLink(Base, PkMixin, TimestampMixin):
+    """发票与采购/销售业务单据的可审计关联。"""
+
+    __tablename__ = "tax_invoice_links"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", "target_type", "target_id", name="uq_tax_invoice_link_target"),
+    )
+
+    invoice_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    target_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    allocated_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    match_method: Mapped[str] = mapped_column(String(32), default="manual")
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    note: Mapped[str] = mapped_column(Text, default="")

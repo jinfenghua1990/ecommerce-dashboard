@@ -12,12 +12,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
 
   // 上次“记住登录”过的电脑，回填用户名
   useEffect(() => {
     const saved = window.localStorage.getItem(USERNAME_KEY);
     if (saved) setUsername(saved);
+    if (new URLSearchParams(window.location.search).get("passwordChanged") === "1") {
+      setNotice("密码已修改，请使用新密码重新登录");
+    }
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -88,6 +92,9 @@ export default function LoginPage() {
 
           {error && (
             <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</div>
+          )}
+          {notice && !error && (
+            <div className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</div>
           )}
 
           <button

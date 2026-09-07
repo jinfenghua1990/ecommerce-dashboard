@@ -3,6 +3,9 @@
 import io
 
 from app.adapters.bank_file import parse_xlsx
+from app.config import settings
+from app.models.bank import BankImportBatch, BankTransaction
+from app.models.finance import ArchiveFile
 
 
 def _make_xlsx(headers: list[str], rows: list[list]) -> bytes:
@@ -66,6 +69,30 @@ def test_parse_xlsx_non_txn_sheet_returns_empty():
 
 def test_parse_xlsx_empty():
     assert parse_xlsx(b"not-a-xlsx") == []
+
+
+def test_import_archives_original_and_links_batch(client, db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
+    content = _make_xlsx(
+        ["交易日期", "摘要", "对方户名", "收入金额", "支出金额", "余额", "流水号"],
+        [["2097-06-01", "测试归档", "测试平台", 321.00, None, 500, "ARCHIVE-2097-001"]],
+    )
+    response = client.post(
+        "/api/v1/reconciliation/import-bank",
+        files={"file": ("浙江农信测试.xlsx", content,
+                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"account_no": "ZJRC-TEST", "period_year": "2097", "period_month": "6"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    archive = db_session.get(ArchiveFile, body["archiveFileId"])
+    batch = db_session.get(BankImportBatch, body["batchId"])
+    txn = db_session.query(BankTransaction).filter_by(voucher_no="ARCHIVE-2097-001").one()
+    assert archive is not None
+    assert archive.original_name == "浙江农信测试.xlsx"
+    assert batch.archive_file_id == archive.id
+    assert batch.file_name == archive.original_name
+    assert txn.import_batch_id == batch.id
 
 
 # ---------- 财务邮件幂等（规格 16：一个账期+版本只允许一条首次成功发送） ----------

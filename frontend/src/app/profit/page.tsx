@@ -97,7 +97,7 @@ export default function ProfitPage() {
       <div className="mt-8 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">登记 SKU 成本</div>
         <p className="mt-1 text-xs text-gray-400">
-          同一 SKU 同一账期只允许登记一种来源的成本；重复登记值变化时版本号 +1。
+          同一 SKU 同一账期可登记多种来源；系统按“实际结算 &gt; 采购订单 &gt; 默认 &gt; 暂估”自动选取生效成本。
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
@@ -183,11 +183,13 @@ export default function ProfitPage() {
         ) : (
           <div className="mt-3 grid grid-cols-3 gap-3">
             <MetricCard label="净销售收入" value={`¥${compute?.netSales ?? "0"}`} />
-            <MetricCard label="商品成本" value={`¥${compute?.goodsCost ?? "0"}`} />
+            <MetricCard label="商品成本" value={compute?.goodsCost !== null ? `¥${compute?.goodsCost ?? "0"}` : "—"} />
             <MetricCard
               label="商品毛利"
               value={compute?.grossProfit !== null ? `¥${compute?.grossProfit ?? "0"}` : "—"}
-              hint={compute?.costMissing ? `成本缺失 SKU：${compute?.costMissingSkus.length ?? 0} 个，毛利不完整` : undefined}
+              hint={compute?.costMissing
+                ? `缺成本 SKU ${compute.costMissingSkus.length} 个；未映射/缺数量明细 ${(compute.unmappedItems?.length ?? 0) + (compute.quantityMissingItems?.length ?? 0)} 条`
+                : undefined}
             />
           </div>
         )}
