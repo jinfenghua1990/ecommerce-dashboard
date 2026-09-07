@@ -58,18 +58,39 @@ jobs:
         run: |
           bash -n scripts/*.sh
           bash scripts/orphan-audit.sh
-      - name: Backup and restore drill
-        env:
-          POSTGRES_HOST: 127.0.0.1
-          POSTGRES_PORT: 5432
-          POSTGRES_DB: ecommerce
-          POSTGRES_USER: ecommerce
-          POSTGRES_PASSWORD: ecommerce
+      - name: Backup and restore drill (PostgreSQL 17 tools)
         run: |
-          rm -rf /tmp/ecom-ci-backup
-          mkdir -p /tmp/ecom-ci-backup
-          BACKUP_DIR=/tmp/ecom-ci-backup KEEP=1 bash scripts/backup.sh --no-files
-          BACKUP_DIR=/tmp/ecom-ci-backup bash scripts/restore-check.sh
+          set -euo pipefail
+          PG_CONTAINER="$(docker ps --filter 'ancestor=postgres:17' --format '{{.ID}}' | head -1)"
+          test -n "$PG_CONTAINER"
+          DUMP=/tmp/ecom-ci-backup.dump
+          CHECK_DB="ecommerce_restorecheck_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+              dropdb -h 127.0.0.1 -U ecommerce --if-exists "$CHECK_DB" >/dev/null 2>&1 || true
+            rm -f "$DUMP"
+          }
+          trap cleanup EXIT
+
+          docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            pg_dump -h 127.0.0.1 -U ecommerce -Fc ecommerce > "$DUMP"
+          test -s "$DUMP"
+
+          docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            createdb -h 127.0.0.1 -U ecommerce "$CHECK_DB"
+          cat "$DUMP" | docker exec -i -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            pg_restore -h 127.0.0.1 -U ecommerce -d "$CHECK_DB" \
+              --no-owner --no-privileges --exit-on-error
+
+          TABLE_COUNT="$(docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            psql -h 127.0.0.1 -U ecommerce -d "$CHECK_DB" -Atc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")"
+          test "$TABLE_COUNT" -gt 0
+
+          export DATABASE_URL="postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/$CHECK_DB"
+          cd backend
+          alembic upgrade head
+          alembic current
       - name: Lint new core changes (blocking)
         run: |
           cd backend && python -m pyflakes \
