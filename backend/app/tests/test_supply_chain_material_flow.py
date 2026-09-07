@@ -122,6 +122,7 @@ def test_material_dispatch_and_factory_receive_move_real_stock(db_session):
 def test_material_flow_rejects_over_dispatch_over_receive_and_cancel_after_dispatch(db_session):
     order, material, reservation_id = _order(db_session)
 
+    # 纯业务校验异常不会破坏数据库事务；这里不能 rollback，否则会把测试准备数据一起撤销。
     with pytest.raises(ValueError, match="超过当前预占"):
         dispatch_materials(
             db_session,
@@ -130,7 +131,6 @@ def test_material_flow_rejects_over_dispatch_over_receive_and_cancel_after_dispa
             actor="pytest",
             request_key=str(uuid4()),
         )
-    db_session.rollback()
 
     dispatch_materials(
         db_session,
@@ -148,7 +148,6 @@ def test_material_flow_rejects_over_dispatch_over_receive_and_cancel_after_dispa
             actor="pytest",
             request_key=str(uuid4()),
         )
-    db_session.rollback()
 
     with pytest.raises(ValueError, match="已有耗材发往工厂"):
         cancel_production_order(db_session, order.id)
