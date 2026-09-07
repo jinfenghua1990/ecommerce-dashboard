@@ -30,7 +30,7 @@ FINISHED_FLOW_ORDER_STATUSES = {
 
 
 def _qty(value: Decimal | None) -> str:
-    return f"{to_decimal(value):f}"
+    return f"{to_decimal(value):.4f}"
 
 
 def _movement_no(kind: str) -> str:
