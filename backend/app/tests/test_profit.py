@@ -108,6 +108,34 @@ def test_compute_filters_period_and_multiplies_unit_cost_by_quantity(db_session)
     assert result["costMissing"] is False
 
 
+def test_compute_uses_asia_shanghai_month_boundary(db_session):
+    """2098-08-31 16:30 UTC 已是上海 9 月 1 日 00:30，必须归入 9 月。"""
+    sku = ProductSku(
+        jackyun_sku_id="test-profit-tz", sku_code="P-TZ", sku_name="时区边界",
+        default_cost=Decimal("10.00"),
+    )
+    db_session.add(sku)
+    db_session.flush()
+    order = SalesOrder(
+        order_no="test-profit-tz-boundary", order_status="paid",
+        ordered_at=datetime(2098, 8, 31, 16, 30, tzinfo=timezone.utc),
+    )
+    db_session.add(order)
+    db_session.flush()
+    db_session.add(SalesOrderItem(
+        order_id=order.id, sku_id=sku.id, quantity=Decimal("2"),
+        amount=Decimal("50"), discount_amount=Decimal("0"),
+    ))
+    db_session.commit()
+
+    august = compute(db_session, 2098, 8)
+    september = compute(db_session, 2098, 9)
+    assert august["netSales"] is None
+    assert september["netSales"] == "50.00"
+    assert september["goodsCost"] == "20.00"
+    assert september["grossProfit"] == "30.00"
+
+
 def test_compute_with_unmapped_item_does_not_publish_partial_cost(db_session):
     order = SalesOrder(
         order_no="test-profit-unmapped-2098", pay_status="paid",
