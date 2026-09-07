@@ -1,11 +1,11 @@
 """财务交付汇总：底层保留税务明细，发给财务时只按会计大类汇总。
 
 原则：
-- 只使用 active 的官方税务导入；金额、税额、数量均不从吉客云/1688/手工数据补齐。
+- 金额、税额、数量只来自 active 的官方税务导入，不从吉客云/1688/手工业务数据补齐。
 - 汇总维度为“财务大类 + 税率”；不同税率不能混成一行。
-- 数量仅在同一汇总组的单位一致时合计；多单位时不强行相加。
-- 可读取官方项目名形如 *软饮料*具体商品 的税收分类前缀；除此之外不猜分类。
-- 原始 TaxInvoiceImportRecord 永久保留，本服务只读，不修改、不删除明细。
+- 数量仅在同一汇总组单位一致时合计；多单位不强行相加。
+- 分类优先级：官方分类字段 > 官方项目名 `*大类*项目` 前缀 > 用户显式维护的分类规则。
+- 用户分类规则可自行新增/修改/停用，不需要改代码。
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.tax import TaxInvoice, TaxInvoiceImport, TaxInvoiceImportRecord
+from app.services import tax_category_rule_service as category_rule_service
 
 
 ALIASES: dict[str, tuple[str, ...]] = {
@@ -66,13 +67,18 @@ def _pick(raw: dict[str, Any], aliases: tuple[str, ...]) -> str:
     return ""
 
 
-def _official_accounting_category(raw: dict[str, Any], goods_name: str) -> str:
-    """只从官方字段或官方项目名星号前缀取大类，不按关键词猜。"""
+def _resolve_accounting_category(raw: dict[str, Any], goods_name: str, rules: list) -> tuple[str, str, int | None]:
+    """返回 (财务大类, 来源, 用户规则ID)。"""
     explicit = _pick(raw, ALIASES["accounting_category"]).strip()
     if explicit:
-        return explicit
+        return explicit, "official_field", None
     match = re.match(r"^\s*[＊*]([^＊*]+)[＊*]", goods_name or "")
-    return match.group(1).strip() if match else ""
+    if match:
+        return match.group(1).strip(), "official_star_prefix", None
+    rule = category_rule_service.match_rule(goods_name, rules)
+    if rule:
+        return rule.category_name, "user_rule", rule.id
+    return "", "none", None
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -110,8 +116,9 @@ def _month_range(year: int, month: int) -> tuple[datetime, datetime]:
 
 
 def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
-    """生成给财务看的大类汇总；明细保留在系统内，不进入财务主表。"""
+    """生成给财务看的大类汇总；逐条明细只在系统内保留。"""
     start, end = _month_range(year, month)
+    rules = category_rule_service.enabled_rule_rows(db)
     rows = (
         db.query(TaxInvoiceImportRecord, TaxInvoice)
         .join(TaxInvoice, TaxInvoice.id == TaxInvoiceImportRecord.invoice_id)
@@ -141,7 +148,7 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
     for record, invoice in rows:
         raw = record.payload or {}
         goods_name = _pick(raw, ALIASES["goods_name"]).strip()
-        category = _official_accounting_category(raw, goods_name)
+        category, category_source, category_rule_id = _resolve_accounting_category(raw, goods_name, rules)
         tax_rate = _pick(raw, ALIASES["tax_rate"]).strip()
         unit = _pick(raw, ALIASES["unit"]).strip()
         quantity = _decimal(_pick(raw, ALIASES["quantity"]))
@@ -163,7 +170,7 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
 
         reasons: list[str] = []
         if not category:
-            reasons.append("缺少官方税收分类名称/项目名分类前缀，禁止自动猜分类")
+            reasons.append("缺少官方分类且未命中你维护的财务分类规则，请先添加类似 *软饮料*咖啡 的规则")
         if amount is None:
             reasons.append("缺少官方不含税金额")
         if tax_amount is None:
@@ -196,6 +203,8 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
             "invoiceNumber": invoice.invoice_number,
             "rowIndex": record.row_index,
             "accountingCategory": category,
+            "categorySource": category_source,
+            "categoryRuleId": category_rule_id,
             "goodsName": goods_name,
             "taxCode": tax_code,
             "taxRate": tax_rate,
@@ -273,10 +282,12 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
             "deliveryView": "accounting_category_plus_tax_rate",
             "detailStorage": "retained_internal_only",
             "detailDeletable": False,
-            "sourcePriority": "official_tax_invoice_only",
+            "moneySource": "official_tax_invoice_only",
             "businessFallback": False,
-            "officialCategoryPrefixSupported": True,
-            "note": "财务主表按大类汇总；发票号、商品、数量、单价、税额等原始明细永久保留在系统内，不作为财务主表逐条发送。",
+            "categoryRuleEditable": True,
+            "categoryRuleApi": "/api/v1/tax-accounting/category-rules",
+            "categoryRulePage": "/finance/tax-accounting/categories",
+            "note": "财务主表按大类汇总；分类可由官方字段、官方*大类*项目格式或你维护的分类规则确定。底层发票明细永久保留。",
         },
         "readyForFinanceDelivery": len(blockers) == 0 and len(summary_rows) > 0,
         "summary": {
