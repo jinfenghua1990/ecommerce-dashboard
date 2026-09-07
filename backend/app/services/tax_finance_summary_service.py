@@ -4,6 +4,7 @@
 - 只使用 active 的官方税务导入；金额、税额、数量均不从吉客云/1688/手工数据补齐。
 - 汇总维度为“财务大类 + 税率”；不同税率不能混成一行。
 - 数量仅在同一汇总组的单位一致时合计；多单位时不强行相加。
+- 可读取官方项目名形如 *软饮料*具体商品 的税收分类前缀；除此之外不猜分类。
 - 原始 TaxInvoiceImportRecord 永久保留，本服务只读，不修改、不删除明细。
 """
 from __future__ import annotations
@@ -63,6 +64,15 @@ def _pick(raw: dict[str, Any], aliases: tuple[str, ...]) -> str:
             if alias in key and value:
                 return value
     return ""
+
+
+def _official_accounting_category(raw: dict[str, Any], goods_name: str) -> str:
+    """只从官方字段或官方项目名星号前缀取大类，不按关键词猜。"""
+    explicit = _pick(raw, ALIASES["accounting_category"]).strip()
+    if explicit:
+        return explicit
+    match = re.match(r"^\s*[＊*]([^＊*]+)[＊*]", goods_name or "")
+    return match.group(1).strip() if match else ""
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -130,9 +140,9 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
 
     for record, invoice in rows:
         raw = record.payload or {}
-        category = _pick(raw, ALIASES["accounting_category"]).strip()
-        tax_rate = _pick(raw, ALIASES["tax_rate"]).strip()
         goods_name = _pick(raw, ALIASES["goods_name"]).strip()
+        category = _official_accounting_category(raw, goods_name)
+        tax_rate = _pick(raw, ALIASES["tax_rate"]).strip()
         unit = _pick(raw, ALIASES["unit"]).strip()
         quantity = _decimal(_pick(raw, ALIASES["quantity"]))
         unit_price = _decimal(_pick(raw, ALIASES["unit_price"]))
@@ -153,7 +163,7 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
 
         reasons: list[str] = []
         if not category:
-            reasons.append("缺少官方税收分类名称/财务大类，禁止自动猜分类")
+            reasons.append("缺少官方税收分类名称/项目名分类前缀，禁止自动猜分类")
         if amount is None:
             reasons.append("缺少官方不含税金额")
         if tax_amount is None:
@@ -265,6 +275,7 @@ def build_finance_summary(db: Session, year: int, month: int) -> dict[str, Any]:
             "detailDeletable": False,
             "sourcePriority": "official_tax_invoice_only",
             "businessFallback": False,
+            "officialCategoryPrefixSupported": True,
             "note": "财务主表按大类汇总；发票号、商品、数量、单价、税额等原始明细永久保留在系统内，不作为财务主表逐条发送。",
         },
         "readyForFinanceDelivery": len(blockers) == 0 and len(summary_rows) > 0,
