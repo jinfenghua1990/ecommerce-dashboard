@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -18,6 +17,7 @@ from app.core.audit import audit
 from app.models.catalog import ProductSku
 from app.models.profit import CostSnapshot
 from app.models.sales import SalesOrder, SalesOrderItem
+from app.services.monthly_core import month_bounds
 from app.utils.money import quantize, to_decimal
 
 COST_PRIORITY = ("actual_cost", "purch_order_cost", "default_cost", "estimated_cost")
@@ -224,11 +224,8 @@ def compute(db: Session, period_year: int, period_month: int) -> dict[str, Any]:
     """按账期计算商品毛利；单位成本乘销量，缺失项明确返回。"""
     if not (1 <= period_month <= 12):
         raise ValueError("非法账期")
-    period_start = datetime(period_year, period_month, 1, tzinfo=timezone.utc)
-    next_start = (
-        datetime(period_year + 1, 1, 1, tzinfo=timezone.utc)
-        if period_month == 12 else datetime(period_year, period_month + 1, 1, tzinfo=timezone.utc)
-    )
+    # 与经营总览/月结共用业务时区自然月边界，禁止 UTC 月份造成月初/月末跨期。
+    period_start, next_start = month_bounds(period_year, period_month)
     items = (
         db.query(SalesOrderItem)
         .join(SalesOrder, SalesOrder.id == SalesOrderItem.order_id)
