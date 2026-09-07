@@ -102,13 +102,17 @@ jobs:
           cd backend && python -m pyflakes \
             app/api/v1/supply_chain.py \
             app/api/v1/supply_chain_material_flow.py \
+            app/api/v1/supply_chain_finished_flow.py \
+            app/services/consumable_service.py \
             app/services/production_service.py \
             app/services/production_material_flow_service.py \
+            app/services/production_finished_flow_service.py \
             app/services/monthly_core.py \
             app/services/closing.py \
             app/models/production.py \
             app/tests/test_supply_chain_production.py \
             app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_supply_chain_finished_flow.py \
             app/tests/test_monthly_core.py
       - name: Runtime undefined-name scan (blocking)
         run: |
@@ -123,6 +127,7 @@ jobs:
           cd backend && python -m pytest \
             app/tests/test_supply_chain_production.py \
             app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_supply_chain_finished_flow.py \
             app/tests/test_monthly_core.py \
             -q --tb=short
       - name: Full backend test suite (blocking)
