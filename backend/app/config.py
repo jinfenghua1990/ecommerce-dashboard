@@ -1,4 +1,5 @@
 from functools import lru_cache
+from importlib.util import find_spec
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -151,11 +152,7 @@ class Settings(BaseSettings):
     @property
     def alibaba_1688_browser_ready(self) -> bool:
         """Playwright 依赖可用（Docker/未安装环境优雅降级为不可用）。"""
-        try:
-            import playwright  # noqa: F401
-        except ImportError:
-            return False
-        return True
+        return find_spec("playwright") is not None
 
 
 @lru_cache
