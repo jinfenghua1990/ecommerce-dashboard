@@ -110,13 +110,33 @@ def test_finance_summary_groups_detail_into_broad_category_and_keeps_tax_rates_s
     assert row_9["amountExclTax"] == "500.00"
     assert row_9["taxAmount"] == "45.00"
 
-    # 财务 CSV 只出现大类，不泄露逐条商品明细；内部 details 仍完整保留。
     csv_text = to_finance_csv(report).decode("utf-8-sig")
     assert "软饮料" in csv_text
     assert "气泡饮料A" not in csv_text
     assert "茶饮料B" not in csv_text
     assert {item["goodsName"] for item in report["details"]} >= {"气泡饮料A", "茶饮料B"}
     assert all(item["deletable"] is False for item in report["details"])
+
+
+def test_official_invoice_star_prefix_can_supply_broad_category(db_session):
+    batch = _batch(db_session)
+    _invoice_detail(
+        db_session,
+        batch,
+        row_index=1,
+        goods_name="*软饮料*咖啡饮料",
+        category="",
+        tax_rate="13%",
+        quantity="12",
+        unit="箱",
+        amount="1200",
+        tax="156",
+    )
+
+    report = build_finance_summary(db_session, 2026, 8)
+    assert report["readyForFinanceDelivery"] is True
+    assert report["categories"][0]["accountingCategory"] == "软饮料"
+    assert report["details"][0]["goodsName"] == "*软饮料*咖啡饮料"
 
 
 def test_finance_summary_never_forces_mixed_units_into_one_quantity(db_session):
