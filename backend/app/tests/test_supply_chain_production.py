@@ -141,6 +141,9 @@ def test_replenishment_counts_produced_goods_until_real_inbound(db_session):
     assert Decimal(row["suggestedReplenishment"]) == Decimal("1")
 
     # 部分关联真实入库 8 后，只剩 12 作为生产待供应。
+    # 测试数据必须满足数据库约束：入库数量不能超过已到货数量，已到货不能超过已发货数量。
+    item.shipped_qty = Decimal("20")
+    item.arrived_qty = Decimal("20")
     item.inbound_qty = Decimal("8")
     order.status = "inbound"
     db_session.commit()
