@@ -6,7 +6,7 @@ import pytest
 
 from app.adapters.jackyun_export_file import parse_jackyun_export
 from app.config import settings
-from app.models.jackyun_import import JackyunFileImport, JackyunFileImportRecord
+from app.models.jackyun_import import JackyunFileImportRecord
 from app.models.sales import SalesOrder
 from app.services import jackyun_file_import_service as service
 
