@@ -13,7 +13,8 @@ MATCHES="$(git grep -nEI "$PATTERN" -- . ':!frontend/package-lock.json' 2>/dev/n
 
 if [[ -n "$MATCHES" ]]; then
   echo "检测到疑似真实密钥/Token/私钥，禁止提交："
-  printf '%s\n' "$MATCHES"
+  # 不把命中的秘密再次写进 CI 日志，只显示文件和行号。
+  printf '%s\n' "$MATCHES" | awk -F: '{print $1 ":" $2 ": [REDACTED]"}'
   echo "请立即从源码移除并改用 .env / GitHub Actions Secrets；如果是真实密钥且已经公开，应立即轮换。"
   exit 1
 fi
