@@ -35,8 +35,6 @@ class TaxInvoiceImport(Base, PkMixin, TimestampMixin):
     matched_row_count: Mapped[int] = mapped_column(Integer, default=0)
     needs_review_count: Mapped[int] = mapped_column(Integer, default=0)
     error_summary: Mapped[str] = mapped_column(Text, default="")
-    uploader: Mapped[str] = mapped_column(String(64), default="system")
-    # 导入生命周期：draft=解析完毕待人工确认，active=确认后出现在业务页，deleted=软删除（可恢复）。
     lifecycle: Mapped[str] = mapped_column(String(16), default="active", index=True)
     lifecycle_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -54,7 +52,6 @@ class TaxInvoiceImportRecord(Base, PkMixin):
     recognition_status: Mapped[str] = mapped_column(String(32), default="needs_review", index=True)
     invoice_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     error_summary: Mapped[str] = mapped_column(Text, default="")
-    # 行级状态：active=保留；deleted=用户在明细核对中删除的行（可恢复，其发票同步从台账隐藏）。
     row_status: Mapped[str] = mapped_column(String(16), default="active", server_default="active", index=True)
 
 
@@ -65,11 +62,11 @@ class TaxInvoice(Base, PkMixin, TimestampMixin):
     __table_args__ = (UniqueConstraint("invoice_key", name="uq_tax_invoice_key"),)
 
     invoice_key: Mapped[str] = mapped_column(String(256), nullable=False)
-    direction: Mapped[str] = mapped_column(String(16), default="unknown", index=True)  # input/output/unknown
+    direction: Mapped[str] = mapped_column(String(16), default="unknown", index=True)
     invoice_code: Mapped[str] = mapped_column(String(64), default="", index=True)
     invoice_number: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     invoice_type: Mapped[str] = mapped_column(String(128), default="")
-    status: Mapped[str] = mapped_column(String(32), default="unknown", index=True)  # issued/void/red/unknown
+    status: Mapped[str] = mapped_column(String(32), default="unknown", index=True)
     issue_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     seller_name: Mapped[str] = mapped_column(String(256), default="", index=True)
     seller_tax_id: Mapped[str] = mapped_column(String(64), default="", index=True)
@@ -82,9 +79,8 @@ class TaxInvoice(Base, PkMixin, TimestampMixin):
     source_system: Mapped[str] = mapped_column(String(64), default="tax_export", index=True)
     source_import_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     source_row_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    match_status: Mapped[str] = mapped_column(String(32), default="unmatched", index=True)  # matched/unmatched/needs_review
+    match_status: Mapped[str] = mapped_column(String(32), default="unmatched", index=True)
     match_note: Mapped[str] = mapped_column(Text, default="")
-    # 税务认证（勾选抵扣）：true=已认证抵扣，false=未认证；verified_month 记录认证所属月份，如 2026-08
     verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     verified_month: Mapped[str] = mapped_column(String(16), default="")
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -107,3 +103,22 @@ class TaxInvoiceLink(Base, PkMixin, TimestampMixin):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class TaxAccountingCategoryRule(Base, PkMixin, TimestampMixin):
+    """用户可维护的财务大类规则，例如 *软饮料*咖啡。"""
+
+    __tablename__ = "tax_accounting_category_rules"
+    __table_args__ = (
+        UniqueConstraint("category_name", "item_name", name="uq_tax_accounting_category_rule"),
+    )
+
+    category_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    item_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    match_keyword: Mapped[str] = mapped_column(String(256), default="")
+    match_mode: Mapped[str] = mapped_column(String(16), default="contains")
+    priority: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="system")
+    updated_by: Mapped[str] = mapped_column(String(64), default="system")
