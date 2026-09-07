@@ -1,8 +1,7 @@
-"""供应链中心：委外生产订单、耗材预占与发厂流转。
+"""供应链中心：委外生产、耗材流转与成品生产/在途/入库关联。
 
-生产单代表“补货计划选择工厂生产”后的执行单据。耗材预占只占用可用量，
-不直接改动 consumables.stock_qty；实际发往工厂时才通过耗材流水从自有仓转入在途，
-工厂签收后再由在途转入工厂库存。每一次发料/签收都保留不可覆盖的 movement 记录。
+正品最终库存事实仍来自吉客云 InventorySnapshot。本模块只记录供应链执行过程：
+生产完成 → 工厂发货 → 到货 → 关联吉客云真实入库单；不会自行给正品库存加数。
 """
 
 from datetime import date, datetime
@@ -35,7 +34,10 @@ class ProductionOrderItem(Base, PkMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("production_order_id", "sku_id", name="uq_production_order_item_sku"),
         CheckConstraint(
-            "quantity > 0 AND completed_qty >= 0 AND completed_qty <= quantity",
+            "quantity > 0 "
+            "AND completed_qty >= 0 AND shipped_qty >= 0 AND arrived_qty >= 0 AND inbound_qty >= 0 "
+            "AND inbound_qty <= arrived_qty AND arrived_qty <= shipped_qty "
+            "AND shipped_qty <= completed_qty AND completed_qty <= quantity",
             name="ck_production_order_item_quantities",
         ),
     )
@@ -47,6 +49,9 @@ class ProductionOrderItem(Base, PkMixin, TimestampMixin):
     unit: Mapped[str] = mapped_column(String(32), default="")
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
     completed_qty: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("0"))
+    shipped_qty: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("0"))
+    arrived_qty: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("0"))
+    inbound_qty: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("0"))
 
 
 class ProductionMaterialReservation(Base, PkMixin, TimestampMixin):
@@ -76,11 +81,7 @@ class ProductionMaterialReservation(Base, PkMixin, TimestampMixin):
 
 
 class ProductionMaterialMovement(Base, PkMixin, TimestampMixin):
-    """生产耗材流转事实。
-
-    dispatch：自有仓 → 在途；factory_receive：在途 → 工厂库存。
-    同一个 API request_key 可包含多条耗材，通过 request_key + reservation + type 保证幂等。
-    """
+    """生产耗材流转事实：发厂 / 工厂签收 / 工厂实际消耗。"""
 
     __tablename__ = "production_material_movements"
     __table_args__ = (
@@ -90,7 +91,7 @@ class ProductionMaterialMovement(Base, PkMixin, TimestampMixin):
         ),
         CheckConstraint("quantity > 0", name="ck_production_material_movement_qty"),
         CheckConstraint(
-            "movement_type IN ('dispatch', 'factory_receive')",
+            "movement_type IN ('dispatch', 'factory_receive', 'consume')",
             name="ck_production_material_movement_type",
         ),
         Index("ix_production_material_movements_order_time", "production_order_id", "occurred_at"),
@@ -108,3 +109,58 @@ class ProductionMaterialMovement(Base, PkMixin, TimestampMixin):
     note: Mapped[str] = mapped_column(Text, default="")
     actor: Mapped[str] = mapped_column(String(128), default="")
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ProductionFinishedMovement(Base, PkMixin, TimestampMixin):
+    """成品执行事实：生产完成 / 工厂发货 / 到货。正品入库不在这里伪造。"""
+
+    __tablename__ = "production_finished_movements"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_key", "production_order_item_id", "movement_type",
+            name="uq_production_finished_movement_request",
+        ),
+        CheckConstraint("quantity > 0", name="ck_production_finished_movement_qty"),
+        CheckConstraint(
+            "movement_type IN ('complete', 'ship', 'arrive')",
+            name="ck_production_finished_movement_type",
+        ),
+        Index("ix_production_finished_movements_order_time", "production_order_id", "occurred_at"),
+    )
+
+    movement_no: Mapped[str] = mapped_column(String(48), index=True)
+    request_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    production_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("production_orders.id"), index=True)
+    production_order_item_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("production_order_items.id"), index=True)
+    sku_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("product_skus.id"), index=True)
+    movement_type: Mapped[str] = mapped_column(String(24), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    carrier: Mapped[str] = mapped_column(String(128), default="")
+    tracking_no: Mapped[str] = mapped_column(String(128), default="", index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
+class ProductionInboundAllocation(Base, PkMixin, TimestampMixin):
+    """生产成品与吉客云真实入库明细的数量关联，不直接修改正品库存。"""
+
+    __tablename__ = "production_inbound_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "production_order_item_id", "inbound_item_id",
+            name="uq_production_inbound_item_allocation",
+        ),
+        CheckConstraint("quantity > 0", name="ck_production_inbound_allocation_qty"),
+        Index("ix_production_inbound_allocations_order_doc", "production_order_id", "inbound_document_id"),
+    )
+
+    request_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    production_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("production_orders.id"), index=True)
+    production_order_item_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("production_order_items.id"), index=True)
+    sku_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("product_skus.id"), index=True)
+    inbound_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("jackyun_goods_documents.id"), index=True)
+    inbound_item_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("jackyun_goods_document_items.id"), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4))
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
