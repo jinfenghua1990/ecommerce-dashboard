@@ -18,7 +18,8 @@ from app.utils.money import to_decimal
 
 
 FLOW_ORDER_STATUSES = {"planned", "confirmed", "producing"}
-MOVEMENT_TYPES = {"dispatch", "factory_receive"}
+CONSUME_ORDER_STATUSES = FLOW_ORDER_STATUSES | {"produced", "shipped", "arrived", "inbound", "completed"}
+MOVEMENT_TYPES = {"dispatch", "factory_receive", "consume"}
 
 
 def _qty(value: Decimal | None) -> str:
@@ -26,7 +27,7 @@ def _qty(value: Decimal | None) -> str:
 
 
 def _movement_no(kind: str) -> str:
-    prefix = "OUT" if kind == "dispatch" else "RCV"
+    prefix = {"dispatch": "OUT", "factory_receive": "RCV", "consume": "USE"}[kind]
     return f"{prefix}-{datetime.now(timezone.utc):%Y%m%d}-{uuid4().hex[:6].upper()}"
 
 
@@ -118,6 +119,29 @@ def _idempotent_existing(
     return existing
 
 
+def _locked_reservations(
+    db: Session,
+    *,
+    order_id: int,
+    reservation_ids: list[int],
+) -> tuple[list[ProductionMaterialReservation], dict[int, ProductionMaterialReservation]]:
+    reservations = db.scalars(
+        select(ProductionMaterialReservation)
+        .where(
+            ProductionMaterialReservation.id.in_(reservation_ids),
+            ProductionMaterialReservation.production_order_id == order_id,
+        )
+        .order_by(ProductionMaterialReservation.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    reservation_map = {row.id: row for row in reservations}
+    missing = [value for value in reservation_ids if value not in reservation_map]
+    if missing:
+        raise ValueError(f"生产耗材明细不存在：{', '.join(str(value) for value in missing)}")
+    return reservations, reservation_map
+
+
 def dispatch_materials(
     db: Session,
     *,
@@ -156,20 +180,11 @@ def dispatch_materials(
         raise ValueError("当前生产单状态不能发耗材")
 
     reservation_ids = sorted(requested)
-    reservations = db.scalars(
-        select(ProductionMaterialReservation)
-        .where(
-            ProductionMaterialReservation.id.in_(reservation_ids),
-            ProductionMaterialReservation.production_order_id == order_id,
-        )
-        .order_by(ProductionMaterialReservation.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).all()
-    reservation_map = {row.id: row for row in reservations}
-    missing = [value for value in reservation_ids if value not in reservation_map]
-    if missing:
-        raise ValueError(f"生产耗材明细不存在：{', '.join(str(value) for value in missing)}")
+    reservations, reservation_map = _locked_reservations(
+        db,
+        order_id=order_id,
+        reservation_ids=reservation_ids,
+    )
 
     material_ids = sorted({row.consumable_id for row in reservations})
     materials = db.scalars(
@@ -274,20 +289,11 @@ def receive_materials(
         raise ValueError("当前生产单状态不能登记工厂签收")
 
     reservation_ids = sorted(requested)
-    reservations = db.scalars(
-        select(ProductionMaterialReservation)
-        .where(
-            ProductionMaterialReservation.id.in_(reservation_ids),
-            ProductionMaterialReservation.production_order_id == order_id,
-        )
-        .order_by(ProductionMaterialReservation.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).all()
-    reservation_map = {row.id: row for row in reservations}
-    missing = [value for value in reservation_ids if value not in reservation_map]
-    if missing:
-        raise ValueError(f"生产耗材明细不存在：{', '.join(str(value) for value in missing)}")
+    _, reservation_map = _locked_reservations(
+        db,
+        order_id=order_id,
+        reservation_ids=reservation_ids,
+    )
 
     for reservation_id in reservation_ids:
         reservation = reservation_map[reservation_id]
@@ -333,5 +339,111 @@ def receive_materials(
 
     if order.status == "planned":
         order.status = "confirmed"
+    db.commit()
+    return [_serialize_movement(row, reservation_map.get(row.reservation_id)) for row in movements]
+
+
+def consume_materials(
+    db: Session,
+    *,
+    order_id: int,
+    items: list[dict],
+    actor: str,
+    request_key: str,
+    note: str = "",
+) -> list[dict]:
+    """登记工厂实际耗材消耗：只扣工厂库存，不再误扣自有仓库存。"""
+    requested = _normalize_items(items)
+    key = request_key.strip()
+    if not key:
+        raise ValueError("缺少请求编号，请刷新页面后重试")
+
+    existing = _idempotent_existing(
+        db,
+        order_id=order_id,
+        movement_type="consume",
+        request_key=key,
+        requested=requested,
+    )
+    if existing is not None:
+        reservations = {
+            row.id: row for row in db.query(ProductionMaterialReservation).filter(
+                ProductionMaterialReservation.id.in_([item.reservation_id for item in existing])
+            ).all()
+        }
+        return [_serialize_movement(row, reservations.get(row.reservation_id)) for row in existing]
+
+    order = db.scalar(select(ProductionOrder).where(ProductionOrder.id == order_id).with_for_update())
+    if order is None:
+        raise ValueError("生产单不存在")
+    if order.status not in CONSUME_ORDER_STATUSES:
+        raise ValueError("当前生产单状态不能登记工厂耗材消耗")
+
+    reservation_ids = sorted(requested)
+    reservations, reservation_map = _locked_reservations(
+        db,
+        order_id=order_id,
+        reservation_ids=reservation_ids,
+    )
+    material_ids = sorted({row.consumable_id for row in reservations})
+    materials = db.scalars(
+        select(Consumable)
+        .where(Consumable.id.in_(material_ids))
+        .order_by(Consumable.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    material_map = {row.id: row for row in materials}
+
+    for reservation_id in reservation_ids:
+        reservation = reservation_map[reservation_id]
+        quantity = requested[reservation_id]
+        usable = to_decimal(reservation.factory_received_qty) - to_decimal(reservation.consumed_qty)
+        if quantity > usable:
+            raise ValueError(
+                f"{reservation.code} 本次消耗 {quantity} 超过该生产单工厂可用耗材 {usable}"
+            )
+        material = material_map.get(reservation.consumable_id)
+        if material is None:
+            raise ValueError(f"耗材 {reservation.code} 不存在")
+        if quantity > to_decimal(material.factory_qty):
+            raise ValueError(
+                f"{reservation.code} 工厂库存不足：当前 {to_decimal(material.factory_qty)}，本次需要 {quantity}"
+            )
+
+    movement_no = _movement_no("consume")
+    now = datetime.now(timezone.utc)
+    movements: list[ProductionMaterialMovement] = []
+    for reservation_id in reservation_ids:
+        reservation = reservation_map[reservation_id]
+        quantity = requested[reservation_id]
+        movement = ProductionMaterialMovement(
+            movement_no=movement_no,
+            request_key=key,
+            production_order_id=order.id,
+            reservation_id=reservation.id,
+            consumable_id=reservation.consumable_id,
+            movement_type="consume",
+            quantity=quantity,
+            note=note.strip(),
+            actor=actor,
+            occurred_at=now,
+        )
+        db.add(movement)
+        db.flush()
+        record_transaction(
+            db,
+            consumable_id=reservation.consumable_id,
+            transaction_type="consume",
+            quantity=str(quantity),
+            source_type="production_material_movement",
+            source_id=movement.id,
+            note=f"生产单 {order.order_no} 工厂 {order.factory_name} 实际消耗; {note.strip()}".rstrip("; "),
+            commit=False,
+            location="factory",
+        )
+        reservation.consumed_qty = to_decimal(reservation.consumed_qty) + quantity
+        movements.append(movement)
+
     db.commit()
     return [_serialize_movement(row, reservation_map.get(row.reservation_id)) for row in movements]
