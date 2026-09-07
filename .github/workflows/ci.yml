@@ -61,6 +61,14 @@ jobs:
             app/tests/test_supply_chain_production.py \
             app/tests/test_supply_chain_material_flow.py \
             app/tests/test_monthly_core.py
+      - name: Runtime undefined-name scan (blocking)
+        run: |
+          cd backend
+          python -m pyflakes app 2>&1 | tee /tmp/pyflakes.txt || true
+          if grep -E "undefined name|referenced before assignment" /tmp/pyflakes.txt; then
+            echo "Runtime-level static error detected"
+            exit 1
+          fi
       - name: Test supply-chain and monthly core (blocking)
         run: |
           cd backend && python -m pytest \
@@ -68,14 +76,13 @@ jobs:
             app/tests/test_supply_chain_material_flow.py \
             app/tests/test_monthly_core.py \
             -q --tb=short
-      - name: Legacy lint report (non-blocking until existing debt is cleaned)
+      - name: Full backend test suite (blocking)
+        run: |
+          cd backend && python -m pytest app/tests -q --tb=short
+      - name: Code hygiene report
         continue-on-error: true
         run: |
           cd backend && python -m pyflakes app
-      - name: Legacy full test report (non-blocking until existing debt is cleaned)
-        continue-on-error: true
-        run: |
-          cd backend && python -m pytest app/tests -q --tb=short
 
   frontend:
     name: Frontend (typecheck)
