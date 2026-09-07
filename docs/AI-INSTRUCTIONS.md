@@ -42,3 +42,4 @@
 - 新增数据库字段必须提供 migration。
 - 新增接口保持 `/api/v1` REST 风格统一。
 - Git：禁止 `git add -A` / `git add .`，逐个文件 add；先备份后删除。
+- **每次 `git pull`（或 fetch+merge）前必须先备份**：① 未提交改动先 commit 或 stash（绝不丢弃）；② 在当前 HEAD 建备份分支 `git branch backup/pre-pull-<YYYYMMDD-HHMM>`；③ 再 pull。合并出问题可 `git reset --hard backup/pre-pull-...` 整体回滚。
