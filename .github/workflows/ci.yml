@@ -85,7 +85,7 @@ jobs:
           cd backend && python -m pyflakes app
 
   frontend:
-    name: Frontend (typecheck)
+    name: Frontend (typecheck + static build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,3 +100,7 @@ jobs:
       - name: Typecheck (tsc)
         run: |
           cd frontend && npx tsc --noEmit
+      - name: Production static build
+        run: |
+          cd frontend && npm run build
+          test -f out/index.html
