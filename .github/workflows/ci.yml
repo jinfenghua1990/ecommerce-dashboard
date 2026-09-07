@@ -31,9 +31,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # 当前 job 直接运行在 GitHub host runner，service container 通过映射端口访问。
       DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/ecommerce
       REDIS_URL: redis://127.0.0.1:6379/0
+      APP_SECRET_KEY: ci-only-test-secret-not-for-production-2026
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,12 +49,26 @@ jobs:
           cd backend && alembic upgrade head
       - name: Lint supply-chain changes (blocking)
         run: |
-          cd backend && python -m pyflakes app/api/v1/supply_chain.py app/services/production_service.py app/models/production.py
+          cd backend && python -m pyflakes \
+            app/api/v1/supply_chain.py \
+            app/api/v1/supply_chain_material_flow.py \
+            app/services/production_service.py \
+            app/services/production_material_flow_service.py \
+            app/models/production.py \
+            app/tests/test_supply_chain_production.py \
+            app/tests/test_supply_chain_material_flow.py
+      - name: Test supply-chain (blocking)
+        run: |
+          cd backend && python -m pytest \
+            app/tests/test_supply_chain_production.py \
+            app/tests/test_supply_chain_material_flow.py \
+            -q --tb=short
       - name: Legacy lint report (non-blocking until existing debt is cleaned)
         continue-on-error: true
         run: |
           cd backend && python -m pyflakes app
-      - name: Test (pytest)
+      - name: Legacy full test report (non-blocking until existing debt is cleaned)
+        continue-on-error: true
         run: |
           cd backend && python -m pytest app/tests -q --tb=short
 
