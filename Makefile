@@ -7,7 +7,7 @@ VENV := $(BACKEND)/.venv
 LAUNCH_LABEL := gui/$(shell id -u)/com.gino.ecommerce-dashboard
 NATIVE_ENV = set -a; . "$(ROOT)/.env"; set +a; export DATABASE_URL="postgresql+psycopg://$$POSTGRES_USER:$$POSTGRES_PASSWORD@localhost:5432/$$POSTGRES_DB"; export REDIS_URL="redis://localhost:6379/0"; export DATA_DIR="$(ROOT)/data";
 
-.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc verify smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
+.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc verify secret-scan smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
 
 help: ## 列出所有 target
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -42,10 +42,13 @@ lint: ## 编译检查后端 Python 文件
 tsc: ## 前端类型检查
 	cd frontend && npx tsc --noEmit
 
-verify: migration-check orphan-audit lint test tsc ## 本地一键验收：真实库引用 + 迁移 + 后端 + 前端静态构建
+secret-scan: ## 扫描 Git 已跟踪文件中的高置信度 token / 私钥
+	bash ./scripts/secret-scan.sh
+
+verify: secret-scan migration-check orphan-audit lint test tsc ## 本地一键验收：敏感信息 + 真实库引用 + 迁移 + 后端 + 前端静态构建
 	cd frontend && npm run build
 	@test -f frontend/out/index.html
-	@echo "本地验收通过：migration / orphan audit / backend tests / TypeScript / static build 均正常。"
+	@echo "本地验收通过：secret scan / migration / orphan audit / backend tests / TypeScript / static build 均正常。"
 
 smoke: ## 枚举公开 API 并做带鉴权 smoke test
 	./scripts/smoke.sh
