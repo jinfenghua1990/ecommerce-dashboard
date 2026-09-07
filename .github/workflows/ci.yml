@@ -49,7 +49,7 @@ jobs:
           cd backend && alembic upgrade head
       - name: Lint supply-chain changes (blocking)
         run: |
-          cd backend && python -m pyflakes app/api/v1/supply_chain.py
+          cd backend && python -m pyflakes app/api/v1/supply_chain.py app/services/production_service.py app/models/production.py
       - name: Legacy lint report (non-blocking until existing debt is cleaned)
         continue-on-error: true
         run: |
