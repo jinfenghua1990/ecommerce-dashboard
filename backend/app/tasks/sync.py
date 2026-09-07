@@ -127,7 +127,7 @@ def sync_jackyun(self, job_type: str, force: bool = False) -> dict[str, Any]:
             _set_jackyun_connection(db, "blocked", message)
             ensure_exception(db, "JACKYUN_SYNC_FAIL", "吉客云同步失败", str(exc))
             return {"status": "blocked", "error": message}
-        except Exception as exc:  # 指数退避重试
+        except Exception as exc:
             message = str(exc)[:500]
             _finish_attempt(db, job.id, "failed", message)
             _set_jackyun_connection(db, "error", message)
@@ -139,27 +139,18 @@ def sync_jackyun(self, job_type: str, force: bool = False) -> dict[str, Any]:
 
 @celery_app.task(name="tasks.sync_1688", bind=True, max_retries=2, default_retry_delay=180)
 def sync_1688(self) -> dict[str, Any]:
-    """1688 订单同步：浏览器直采为主通道，开放平台 OAuth 保留为备用。
-
-    立即同步按钮（自动化页/采购工作台）与每天 07:30 定时任务共用本入口；
-    落库链路与 Excel 导入完全一致（upsert_order_data）。
-    """
+    """1688 订单同步：浏览器直采为主通道，开放平台 OAuth 保留为备用。"""
     db = SessionLocal()
     try:
         from app.config import settings as s
 
         if s.ALIBABA_1688_BROWSER_ENABLED:
-            from app.services.alibaba1688_browser_sync_service import (
-                BrowserCaptureError,
-                sync_orders,
-            )
+            from app.services.alibaba1688_browser_sync_service import BrowserCaptureError, sync_orders
 
             try:
                 return sync_orders(db, actor="system")
             except BrowserCaptureError as exc:
-                # 捕获失败多为页面结构变化/瞬时加载失败：指数退避重试。
                 raise self.retry(exc=exc, countdown=180 * (2 ** self.request.retries))
-        # 浏览器通道关闭时回退开放平台判断（未配置如实跳过，不伪装成功）。
         if not s.alibaba_1688_configured:
             _record("alibaba_1688", "orders", "skipped", "等待 1688 配置（浏览器通道已关闭）")
             return {"status": "skipped"}
@@ -171,7 +162,6 @@ def sync_1688(self) -> dict[str, Any]:
 
 @celery_app.task(name="tasks.login_1688")
 def login_1688() -> dict[str, Any]:
-    """在 worker 所在机器弹出浏览器窗口，等待用户扫码登录 1688（长阻塞任务）。"""
     db = SessionLocal()
     try:
         from app.services.alibaba1688_browser_sync_service import run_login
@@ -183,11 +173,6 @@ def login_1688() -> dict[str, Any]:
 
 @celery_app.task(name="tasks.sync_jky_web", soft_time_limit=4500, time_limit=5400)
 def sync_jky_web() -> dict[str, Any]:
-    """吉客云 Web Adapter 同步（每天 03:30 定时与「立即同步吉客云」按钮共用）。
-
-    销售导出任务轮询最长 15 分钟/模块，故单独放宽软/硬超时（全局默认 10/15 分钟）。
-    模块级失败已在 sync_all 内隔离并落库，这里不再整体重试，避免长任务重复执行。
-    """
     db = SessionLocal()
     try:
         from app.services.jky_web_sync_service import sync_all
@@ -199,7 +184,6 @@ def sync_jky_web() -> dict[str, Any]:
 
 @celery_app.task(name="tasks.sync_jky_orders", soft_time_limit=1800, time_limit=2100)
 def sync_jky_orders() -> dict[str, Any]:
-    """吉客云销售订单三通道同步：Web → Windows RPA → OpenAPI/MCP。"""
     db = SessionLocal()
     try:
         from app.services.jky_order_sync_service import sync_orders
@@ -208,34 +192,31 @@ def sync_jky_orders() -> dict[str, Any]:
     finally:
         db.close()
 
+
 @celery_app.task(name="tasks.monthly_verify", bind=True, max_retries=3, default_retry_delay=60)
 def monthly_verify(self) -> dict[str, Any]:
-    """月初对上月完整校验（规格 13）：财务资料完整性检查 + 缺失进异常中心。"""
+    """月初对上月完整校验：财务资料完整性检查 + 缺失进异常中心。"""
     from datetime import date
 
     from app.services import finance_service
     from app.services.integration_service import ensure_exception
 
     today = date.today()
-    # 上个月
     y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     db = SessionLocal()
     try:
-        period = finance_service.refresh_period_status(
-            db, finance_service.DEFAULT_COMPANY, y, m
-        )
+        period = finance_service.refresh_period_status(db, finance_service.DEFAULT_COMPANY, y, m)
         missing = (period.missing_summary or {}).get("missing", {})
         if period.status != "SENT" and missing:
             ensure_exception(
                 db, "FINANCE_INCOMPLETE", f"财务资料缺失 {y}-{m:02d}",
                 f"缺少: {missing}（月度完整性检查，月初自动）",
             )
-            _record("system", "monthly_verify", "failed",
-                    f"{y}-{m:02d} 财务资料不完整: {missing}")
+            _record("system", "monthly_verify", "failed", f"{y}-{m:02d} 财务资料不完整: {missing}")
             return {"status": "incomplete", "period": f"{y}-{m:02d}", "missing": missing}
         _record("system", "monthly_verify", "success", f"{y}-{m:02d} 资料完整")
         return {"status": "complete", "period": f"{y}-{m:02d}"}
-    except Exception as exc:  # 指数退避重试
+    except Exception as exc:
         _record("system", "monthly_verify", "failed", str(exc)[:500])
         ensure_exception(db, "MONTHLY_VERIFY_FAIL", "月度校验失败", str(exc))
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
@@ -245,11 +226,7 @@ def monthly_verify(self) -> dict[str, Any]:
 
 @celery_app.task(name="tasks.generate_monthly_sales_outbound", bind=True, max_retries=2, default_retry_delay=120)
 def generate_monthly_sales_outbound(self, year: int | None = None, month: int | None = None) -> dict[str, Any]:
-    """月初把上月销售出库报表生成 CSV 并归档进财务资料中心（category=jackyun）。
-
-    与 daily outbound 同步（03:50）错峰：每月 2 日 04:10 跑，确保上月全量已同步。
-    金额维度若有（Excel 导入补全）一并归档；否则仅数量。
-    """
+    """保留的内部销售出库明细归档任务；不再进入默认财务发送计划。"""
     from datetime import date
 
     from app.services import finance_service, sales_outbound_report_service as svc
@@ -272,11 +249,72 @@ def generate_monthly_sales_outbound(self, year: int | None = None, month: int | 
             actor="system",
         )
         _record("system", "sales_outbound_monthly", "success",
-                f"{year}-{month:02d} 销售出库报表已归档（{rep['summary']['docCount']} 单）")
+                f"{year}-{month:02d} 销售出库内部明细已归档（{rep['summary']['docCount']} 单）")
         return {"status": "ok", "period": f"{year}-{month:02d}",
                 "archiveFileId": row.id, "docCount": rep["summary"]["docCount"]}
     except Exception as exc:
         _record("system", "sales_outbound_monthly", "failed", str(exc)[:500])
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+    finally:
+        db.close()
+
+
+@celery_app.task(name="tasks.generate_monthly_accounting_summary", bind=True, max_retries=2, default_retry_delay=120)
+def generate_monthly_accounting_summary(self, year: int | None = None, month: int | None = None) -> dict[str, Any]:
+    """生成实际给财务发送的销售开票大类汇总，不附逐条商品/SKU明细。"""
+    from datetime import date
+
+    from app.services import finance_service
+    from app.services import tax_finance_summary_service as summary_service
+    from app.services.integration_service import ensure_exception
+
+    if year is None or month is None:
+        today = date.today()
+        y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+        year, month = y, m
+    db = SessionLocal()
+    try:
+        report = summary_service.build_finance_summary(db, year, month)
+        if not report["readyForFinanceDelivery"]:
+            detail = f"阻塞项 {report['summary']['blockerCount']} 条"
+            ensure_exception(
+                db,
+                "FINANCE_ACCOUNTING_SUMMARY_BLOCKED",
+                f"财务大类汇总不可发送 {year}-{month:02d}",
+                detail,
+            )
+            _record("system", "accounting_summary_monthly", "failed", f"{year}-{month:02d} {detail}")
+            return {
+                "status": "blocked",
+                "period": f"{year}-{month:02d}",
+                "blockers": report["blockers"],
+            }
+        content = summary_service.to_finance_csv(report)
+        row = finance_service.store_upload(
+            db,
+            company=finance_service.DEFAULT_COMPANY,
+            year=year,
+            month=month,
+            category="invoice",
+            original_name=f"销售开票分类汇总_{year}{month:02d}.csv",
+            content=content,
+            actor="system",
+        )
+        _record(
+            "system",
+            "accounting_summary_monthly",
+            "success",
+            f"{year}-{month:02d} 财务大类汇总已归档（{report['summary']['categoryRowCount']} 类）",
+        )
+        return {
+            "status": "ok",
+            "period": f"{year}-{month:02d}",
+            "archiveFileId": row.id,
+            "categoryRowCount": report["summary"]["categoryRowCount"],
+            "detailRetained": True,
+        }
+    except Exception as exc:
+        _record("system", "accounting_summary_monthly", "failed", str(exc)[:500])
         raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
     finally:
         db.close()
