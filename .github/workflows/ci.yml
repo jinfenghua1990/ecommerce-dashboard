@@ -58,6 +58,18 @@ jobs:
         run: |
           bash -n scripts/*.sh
           bash scripts/orphan-audit.sh
+      - name: Backup and restore drill
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+        run: |
+          rm -rf /tmp/ecom-ci-backup
+          mkdir -p /tmp/ecom-ci-backup
+          BACKUP_DIR=/tmp/ecom-ci-backup KEEP=1 bash scripts/backup.sh --no-files
+          BACKUP_DIR=/tmp/ecom-ci-backup bash scripts/restore-check.sh
       - name: Lint new core changes (blocking)
         run: |
           cd backend && python -m pyflakes \
