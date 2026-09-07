@@ -6,13 +6,17 @@ from celery.signals import task_failure
 
 from app.config import settings
 
-"""Celery 编排。月度经营模式默认不自动拉取吉客云；1688 日同步和月度任务独立保留。"""
+"""Celery 编排。月度经营模式默认不自动拉取吉客云全量数据；1688 日同步、采购入库轻量跟踪和月度任务独立保留。"""
 
 celery_app = Celery(
     "ecommerce_ops",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.sync", "app.tasks.recycle_bin"],
+    include=[
+        "app.tasks.sync",
+        "app.tasks.recycle_bin",
+        "app.tasks.jky_procurement_tracking",
+    ],
 )
 
 # 死信队列：Redis 无原生 DLX，用 task_failure 信号把「最终失败」落 Redis list。
@@ -65,8 +69,8 @@ celery_app.conf.update(
 def _jackyun_schedules() -> dict:
     """吉客云 beat 表（按 JACKYUN_SYNC_MODE 三档切换）。
 
-    manual 是本项目默认：所有吉客云自动同步关闭，仅允许人工触发或月结前主动导入。
-    test / auto 仅保留给连接验证或未来确有实时需求时使用。
+    manual 是本项目默认：吉客云全量/业务接口自动同步关闭，仅允许人工触发或月结前主动导入。
+    注意：1688 采购链所需的“采购入库轻量跟踪”不走这里，单独低频执行。
     """
     if settings.JACKYUN_SYNC_MODE == "manual":
         return {}
@@ -167,7 +171,7 @@ def _jackyun_schedules() -> dict:
 
 
 def _jackyun_daily_schedules() -> dict:
-    """仅在 test/auto 模式启用的吉客云低频任务。manual 必须完全为空。"""
+    """仅在 test/auto 模式启用的吉客云低频全量任务。manual 必须完全为空。"""
     if settings.JACKYUN_SYNC_MODE == "manual":
         return {}
     return {
@@ -196,7 +200,6 @@ def _jackyun_daily_schedules() -> dict:
             "schedule": crontab(hour=3, minute=50),
             "args": ("outbound",),
         },
-        # Web Adapter 也属于吉客云同步，manual 模式必须关闭；此前误放在“非吉客云任务”中。
         "jky-web-daily": {
             "task": "tasks.sync_jky_web",
             "schedule": crontab(hour=3, minute=30),
@@ -209,16 +212,22 @@ def _beat_schedule() -> dict:
     sched.update(_jackyun_schedules())
     sched.update(_jackyun_daily_schedules())
 
-    # 与吉客云实时同步无关的任务仍保留：采购源同步、回收站和月度结算任务。
+    # 与吉客云全量/正式 API 同步无关的轻量采购链任务仍保留。
     sched.update({
         "recycle-bin-purge-daily": {
             "task": "tasks.recycle_bin_purge",
             "schedule": crontab(hour=4, minute=15),
         },
-        # 1688 按既定采购习惯每天同步一次，不属于成品库存实时拉取。
+        # 1688 按既定采购习惯每天同步一次。
         "alibaba1688-daily": {
             "task": "tasks.sync_1688",
             "schedule": crontab(hour=7, minute=30),
+        },
+        # 采购入库跟踪只抓吉客云入库主/明细，不抓销售和全量库存。
+        # 白天每 2 小时核对一次，确保 1688 备注写入后能较快自动建链并跟踪收货。
+        "jky-procurement-inbound-tracking-2h": {
+            "task": "tasks.sync_jky_procurement_tracking",
+            "schedule": crontab(minute=20, hour="8-22/2"),
         },
         "monthly-verify": {
             "task": "tasks.monthly_verify",
