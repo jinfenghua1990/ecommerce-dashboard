@@ -33,7 +33,6 @@ def _store_new_file(content: bytes, original_name: str, sha256: str) -> tuple[Pa
             output.write(content)
         created = True
     except FileExistsError:
-        # 数据库唯一约束仍是最终幂等保障；同 hash 文件本身无需覆盖。
         created = False
     return target, created
 
@@ -82,8 +81,6 @@ def import_export(
     sha256 = hashlib.sha256(content).hexdigest()
     existing = db.query(JackyunFileImport).filter_by(sha256=sha256).first()
     if existing:
-        # 重复上传：deleted 记录恢复可用、draft 在 auto_confirm 下随本次意图转 active，
-        # 保证「重新上传 = 重新映射」，不会被旧生命周期卡住。
         desired = "active" if auto_confirm else "draft"
         if existing.lifecycle != desired:
             existing.lifecycle = desired
@@ -116,7 +113,6 @@ def import_export(
     try:
         db.add(row)
         db.flush()
-        # 每行用原始中文列名落库；后续只需补充真实映射，不会丢掉本次文件数据。
         for offset in range(0, len(parsed.rows), 1000):
             records = [
                 JackyunFileImportRecord(import_id=row.id, row_index=index, payload=payload)
@@ -135,7 +131,6 @@ def import_export(
         raise
     except Exception:
         db.rollback()
-        # 仅移除本次按排他方式创建的文件；绝不碰此前存在的归档。
         if created_file:
             target.unlink(missing_ok=True)
         raise
@@ -224,8 +219,16 @@ _PO_SUPPLIER_COLS = ("供应商", "供应商名称", "往来单位", "供货单�
 _PO_AMOUNT_COLS = ("价税合计", "价税合计金额", "含税金额", "含税合计", "金额", "总金额", "应付金额")
 _PO_DATE_COLS = ("采购日期", "单据日期", "下单日期", "制单日期", "订单日期", "日期")
 _PO_STATUS_COLS = ("单据状态", "状态", "采购单状态")
-# 明细行判据：报表含货品行 → 视为明细报表，按单号分组后金额列求和为整单金额。
 _DETAIL_COLS = ("货品", "商品", "商品名称", "货品名称", "数量", "规格", "单位")
+
+# 入库申请单货品：列名来自吉客云官方导出及已验证历史文件。
+# 外部订单引用只接受明确写着 1688/采购订货号的字段，不把泛化“采购订单号”
+# 当作外部订单，避免把吉客云内部采购单误建成 ExternalPurchaseOrder。
+_INBOUND_APPLY_KEYS = ("申请单号", "入库申请单号", "申请单编号", "入库申请编号")
+_INBOUND_ITEM_NO_KEYS = ("货品编号", "货品编码", "商品编号", "商品编码", "SKU编号", "SKU编码")
+_INBOUND_BARCODE_KEYS = ("条码", "货品条码", "商品条码", "SKU条码", "条形码", "商品条形码")
+_INBOUND_ORDER_REF_KEYS = ("1688采购订单", "1688采购订单号", "1688订单号", "采购订货号", "外部采购订单号")
+_INBOUND_AMOUNT_KEYS = ("采购总金额", "价税合计", "含税金额", "入库金额", "金额")
 
 
 def _pick_cell(row: dict, aliases: tuple[str, ...]) -> str:
@@ -253,7 +256,6 @@ def _to_decimal(text: str) -> Decimal | None:
 
 
 def _serialize_jpo(row) -> dict:
-    from app.models.purchase import JackyunPurchaseOrder  # noqa: F401 (type hint only)
     return {
         "id": row.id,
         "jackyunPurchId": row.jackyun_purch_id,
@@ -265,9 +267,7 @@ def _serialize_jpo(row) -> dict:
     }
 
 
-# 明细型报表的金额列：行小计（不含整单"价税合计"重复值）。
 _DETAIL_AMOUNT_COLS = ("行金额", "本行金额", "明细金额", "金额", "无税金额", "税额")
-# 单头型报表的金额列：整单金额。
 _HEADER_AMOUNT_COLS = ("价税合计", "价税合计金额", "总金额", "应付金额", "含税合计", "含税金额", "金额")
 
 
@@ -276,13 +276,7 @@ def _amount_aliases(detail_like: bool) -> tuple[str, ...]:
 
 
 def map_purchase_import(db: Session, import_id: int, actor: str = "system") -> dict:
-    """把已确认（active）的采购报表行映射为 JackyunPurchaseOrder 业务单。
-
-    - 仅处理 report_type == purchase 的导入批次。
-    - 形态判定：同一行同时含「单号列」与「货品/明细列」的比例 >= 0.5 → 明细报表，
-      按单号分组、金额列取行小计求和为整单金额；否则为单头报表，一行一单。
-    - 幂等：jackyun_purch_id = 采购单号，已存在则原地更新，不重复建单。
-    """
+    """把已确认（active）的采购报表行映射为 JackyunPurchaseOrder 业务单。"""
     from app.models.purchase import JackyunPurchaseOrder
 
     imp = db.get(JackyunFileImport, import_id)
@@ -300,7 +294,6 @@ def map_purchase_import(db: Session, import_id: int, actor: str = "system") -> d
         .all()
     )
     active_rows = [rec for rec in records if rec.row_status == "active"]
-    # 明细行判据：同一行同时有单号 + 明细列；占比过半视为明细报表。
     detail_rows = [
         rec for rec in active_rows
         if _pick_cell(rec.payload, _PO_NO_COLS)
@@ -325,22 +318,17 @@ def map_purchase_import(db: Session, import_id: int, actor: str = "system") -> d
         status = next((_pick_cell(r, _PO_STATUS_COLS) for r in rows if _pick_cell(r, _PO_STATUS_COLS)), "")
         date_text = next((_pick_cell(r, _PO_DATE_COLS) for r in rows if _pick_cell(r, _PO_DATE_COLS)), "")
         raw_amounts: list[Decimal] = []
-        for r in rows:
-            text = _pick_cell(r, amount_aliases)
+        for row in rows:
+            text = _pick_cell(row, amount_aliases)
             if text:
                 amount = _to_decimal(text)
                 if amount is not None:
                     raw_amounts.append(amount)
         if detail_like and len(raw_amounts) > 1 and len({str(a) for a in raw_amounts}) == 1:
-            # 明细行整单金额重复出现 → 只取一次，避免求和翻倍。
             raw_amounts = raw_amounts[:1]
         amount = sum(raw_amounts, Decimal("0")) if raw_amounts else None
 
-        existing = (
-            db.query(JackyunPurchaseOrder)
-            .filter_by(jackyun_purch_id=no)
-            .first()
-        )
+        existing = db.query(JackyunPurchaseOrder).filter_by(jackyun_purch_id=no).first()
         raw_meta = {
             "source": "file_import",
             "importId": import_id,
@@ -383,7 +371,6 @@ def map_purchase_import(db: Session, import_id: int, actor: str = "system") -> d
 
 
 def _parse_date(text: str):
-    """宽松解析日期/时间文本，失败返回 None。"""
     from datetime import datetime as _dt
 
     cleaned = (text or "").strip()
@@ -399,7 +386,6 @@ def _parse_date(text: str):
 
 
 def _fill_inbound_item(item, payload: dict) -> list[str]:
-    """把一行入库申请单货品写进明细行；返回被写入的字段名（便于统计）。"""
     wrote: list[str] = []
 
     def put(field: str, aliases: tuple[str, ...], *, decimal_field: bool = False):
@@ -430,9 +416,9 @@ def _fill_inbound_item(item, payload: dict) -> list[str]:
     put("return_quantity", ("退回数量",), decimal_field=True)
     put("unit_price_tax", ("含税单价",), decimal_field=True)
     put("unit_price_notax", ("无税单价",), decimal_field=True)
-    put_amount_tax = _to_decimal(_pick_cell(payload, ("含税金额", "入库金额")))
-    if put_amount_tax is not None:
-        item.amount_tax = put_amount_tax
+    amount_tax = _to_decimal(_pick_cell(payload, ("含税金额", "入库金额")))
+    if amount_tax is not None:
+        item.amount_tax = amount_tax
         wrote.append("amount_tax")
     amount_notax = _to_decimal(_pick_cell(payload, ("无税金额",)))
     if amount_notax is not None:
@@ -453,7 +439,6 @@ def _fill_inbound_item(item, payload: dict) -> list[str]:
 
 
 def _infer_purchase_platform(rows: list[dict]) -> str:
-    """从来源行的往来单位推断非 1688 渠道；不确定时落到 other。"""
     text = " ".join(_pick_cell(row, _PO_SUPPLIER_COLS) for row in rows).lower()
     if "pdd" in text or "拼多多" in text:
         return "pdd"
@@ -469,12 +454,7 @@ def _platform_label(platform: str) -> str:
 
 
 def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dict:
-    """把「入库申请单货品」报表的行回填到已存在的入库单明细上。
-
-    匹配键：申请单号 → JackyunGoodsDocument.goodsdoc_no；货品编号/条码 → 明细行。
-    只补齐模型里约定由文件通道写入的维度（单价、申请/剩余数量、批次效期等），
-    不覆盖人工锁定的金额校验结论（match_status == manual）。
-    """
+    """把「入库申请单货品」报表回填到入库明细，并登记明确的外部订单关系。"""
     from app.models.jackyun import JackyunGoodsDocument, JackyunGoodsDocumentItem
 
     imp = db.get(JackyunFileImport, import_id)
@@ -497,7 +477,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
                 "createdLinks": 0, "alreadyLinked": 0, "createdExternalOrders": 0,
                 "externalOrderNos": [], "missingRk": []}
 
-    # 形态判定：必须同时能取到「申请单号」与「货品编号」才认作入库申请单货品
     probe = records[0].payload
     if not (_pick_cell(probe, _INBOUND_APPLY_KEYS) and _pick_cell(probe, _INBOUND_ITEM_NO_KEYS)):
         raise ValueError("该报表不含「申请单号 + 货品编号」列，无法按入库申请单货品映射")
@@ -515,8 +494,7 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
         order_no = _pick_cell(rec.payload, _INBOUND_ORDER_REF_KEYS)
         if order_no:
             order_rows.setdefault(order_no, []).append((rec.row_index, rec.payload))
-            if no:
-                relation_rows.setdefault((order_no, no), []).append(rec.row_index)
+            relation_rows.setdefault((order_no, no), []).append(rec.row_index)
 
     matched = 0
     filled_fields = 0
@@ -539,8 +517,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
             .order_by(JackyunGoodsDocumentItem.line_no)
             .all()
         )
-        # 按货品编号（回退条码）建立匹配池。来源文件的每一行都保留；
-        # 同一入库明细可能对应多个采购订单，所以重复行要复用同一目标明细，不能因“已用过”而跳过。
         pool: dict[str, list] = {}
         for item in items:
             for key in (item.goods_no, item.sku_barcode):
@@ -567,8 +543,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
                 matched += 1
                 matched_items.add(target.id)
 
-    # 订单号进入采购链路的统一登记：1688 有原始订单就引用原始订单，
-    # 没有原始订单的编号（PDD/淘宝/线下等）建立 workflow 订单主档。
     from app.models.alibaba1688_import import Alibaba1688Order
     from app.models.procurement_chain import ProcurementChainLink
     from app.models.purchase import ExternalPurchaseOrder
@@ -627,8 +601,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
                 supplier_name=supplier,
                 title=f"{_platform_label(platform)}订单（入库申请单识别）",
                 ordered_at=min(dates) if dates else None,
-                # 入库文件的采购总金额是来源行金额合计，不等同于外部订单实付，
-                # 这里仅存到 raw 供核对，避免把推算值当成付款事实。
                 order_amount=None,
                 paid_amount=None,
                 raw=raw_meta,
@@ -701,9 +673,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
                 rejected_links += 1
             else:
                 already_linked += 1
-                # 入库匹配文件中的订单号 + 入库单号是明确关系。
-                # 旧版本可能已经先按供应商/金额/日期生成了 auto 关系，
-                # 这里升级其来源，不覆盖人工关系。
                 if previous.match_method not in {"manual", "file_import"}:
                     previous.match_method = "file_import"
                     previous.confidence = Decimal("1")
@@ -730,8 +699,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
             target_id=doc.id,
             match_method="file_import",
             confidence=Decimal("1"),
-            # 文件关系按明确的订单号 + 入库单号直接确认；没有耗材来源信息时明确不使用，
-            # 不触发库存扣减。
             confirmed=True,
             note=f"来源：入库申请单货品导入 #{import_id}（原始行 {len(row_indexes)} 行）",
         )
@@ -740,8 +707,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
         created_links.append(link)
         existing_by_key[source_key] = link
 
-    # 文件明确的入库单归属优先于旧的启发式候选。只处理本批次涉及的入库单，
-    # 仅撤销 auto 关系，保留 manual/file_import 关系及审计记录，不删除数据。
     authoritative_target_ids = {
         link.target_id
         for link in db.query(ProcurementChainLink)
@@ -787,7 +752,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
         try:
             alloc_seeded = int(seed_for_link_batch(db, seed_links).get("seeded", 0))
         except Exception:
-            # 链路已经落库；SKU 反填失败不回滚订单/入库关系，后续可从工作台重试。
             alloc_seeded = 0
     audit(db, actor, "jackyun.file_import.map_inbound", "jackyun_file_imports", import_id,
           {"documents": len(docs_hit), "matched": matched,
@@ -826,12 +790,6 @@ def map_inbound_items(db: Session, import_id: int, actor: str = "system") -> dic
 
 
 def map_import(db: Session, import_id: int, actor: str = "system") -> dict:
-    """按报表内容自动选择映射器（不依赖类型判定结果）。
-
-    - 含「采购单号」→ 采购单映射器；
-    - 含「申请单号 + 货品编号」→ 入库申请单货品映射器；
-    - 都不满足 → 返回 skipped，保持原始行存档。
-    """
     imp = db.get(JackyunFileImport, import_id)
     if not imp:
         raise LookupError(f"导入记录 {import_id} 不存在")
@@ -839,10 +797,10 @@ def map_import(db: Session, import_id: int, actor: str = "system") -> dict:
     if imp.lifecycle != "active":
         return {"ok": True, "skipped": True, "reason": "draft 批次，确认后再映射"}
 
-    if _pick_cell({h: h for h in headers}, _PO_NO_COLS):
+    if _pick_cell({header: header for header in headers}, _PO_NO_COLS):
         return {**map_purchase_import(db, import_id, actor=actor), "mapper": "purchase"}
-    has_apply = any(_pick_cell({h: h for h in headers}, (k,)) for k in _INBOUND_APPLY_KEYS)
-    has_item = any(_pick_cell({h: h for h in headers}, (k,)) for k in _INBOUND_ITEM_NO_KEYS)
+    has_apply = any(_pick_cell({header: header for header in headers}, (key,)) for key in _INBOUND_APPLY_KEYS)
+    has_item = any(_pick_cell({header: header for header in headers}, (key,)) for key in _INBOUND_ITEM_NO_KEYS)
     if has_apply and has_item:
         return {**map_inbound_items(db, import_id, actor=actor), "mapper": "inbound_items"}
     return {"ok": True, "skipped": True, "reason": "无匹配映射器（原始行已存档）"}
