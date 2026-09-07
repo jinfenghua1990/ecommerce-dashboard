@@ -31,9 +31,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # service container host 在 GH Actions 网络内即 'postgres'/'redis'，默认值直接命中
-      DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@postgres:5432/ecommerce
-      REDIS_URL: redis://redis:6379/0
+      # 当前 job 直接运行在 GitHub host runner，service container 通过映射端口访问。
+      DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/ecommerce
+      REDIS_URL: redis://127.0.0.1:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
