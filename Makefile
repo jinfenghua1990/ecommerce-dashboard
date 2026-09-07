@@ -7,7 +7,7 @@ VENV := $(BACKEND)/.venv
 LAUNCH_LABEL := gui/$(shell id -u)/com.gino.ecommerce-dashboard
 NATIVE_ENV = set -a; . "$(ROOT)/.env"; set +a; export DATABASE_URL="postgresql+psycopg://$$POSTGRES_USER:$$POSTGRES_PASSWORD@localhost:5432/$$POSTGRES_DB"; export REDIS_URL="redis://localhost:6379/0"; export DATA_DIR="$(ROOT)/data";
 
-.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc smoke migrate migration-check exec-api backup restore-check orphan-audit fresh
+.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
 
 help: ## 列出所有 target
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -62,6 +62,15 @@ restore-check: ## 将最新备份恢复到临时库验证，生产库不做任�
 
 orphan-audit: ## 只读检查老耗材关联表孤儿引用，补 FK 前必须为 0
 	bash ./scripts/orphan-audit.sh
+
+backup-schedule-install: ## 安装 macOS 每日备份 + 每周恢复演练 launchd 计划
+	bash ./scripts/backup-schedule.sh install
+
+backup-schedule-status: ## 查看 macOS 自动备份计划状态
+	bash ./scripts/backup-schedule.sh status
+
+backup-schedule-uninstall: ## 卸载 macOS 自动备份计划
+	bash ./scripts/backup-schedule.sh uninstall
 
 fresh: ## 拒绝自动清空真实业务数据
 	@echo "拒绝执行：fresh 会销毁真实数据；如确有需要，请先单独确认目标与备份。"
