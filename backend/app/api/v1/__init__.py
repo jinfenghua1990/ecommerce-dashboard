@@ -24,6 +24,7 @@ from app.api.v1 import (
     sales_file,
     sales_outbound,
     supply_chain,
+    supply_chain_finished_flow,
     supply_chain_material_flow,
     system,
     tax_invoices,
@@ -51,6 +52,7 @@ api_router.include_router(profit.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(supply_chain.router)
 api_router.include_router(supply_chain_material_flow.router)
+api_router.include_router(supply_chain_finished_flow.router)
 api_router.include_router(opening.router)
 api_router.include_router(closing.router)
 api_router.include_router(consumables.router)
