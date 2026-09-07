@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import current_actor
 from app.db import get_db
 from app.models.catalog import InventorySnapshot, Product, ProductSku
-from app.models.production import ProductionOrder
+from app.models.production import ProductionOrder, ProductionOrderItem
 from app.models.purchase import ExternalPurchaseOrder, PurchaseAllocationItem
 from app.models.sales import SalesOrder, SalesOrderItem
 from app.services.production_service import (
@@ -34,6 +34,7 @@ OPEN_SUPPLY_STATUSES = {
     "shipped",
     "arrived",
 }
+OPEN_PRODUCTION_STATUSES = {"planned", "confirmed", "producing"}
 
 
 class ProductionItemInput(BaseModel):
@@ -84,7 +85,7 @@ def replenishment(
     数据来源：
     - 当前库存：吉客云最新库存快照；
     - 近销：本地销售订单明细 quantity，剔除取消/作废/待审核订单；
-    - 待供应：已确认且尚未入库完成的采购分配数量。
+    - 待供应：已确认尚未入库的采购数量 + 计划中/已确认/生产中的未完成生产数量。
 
     建议补货 = max(日均销量 × (交期天数 + 安全天数) - 当前库存 - 待供应, 0)。
     无库存快照或观察期无销量时不伪造建议数量，返回 null 并给出原因。
@@ -123,7 +124,7 @@ def replenishment(
         elif sku_code:
             sales_by_code[sku_code] = sales_by_code.get(sku_code, Decimal("0")) + qty
 
-    open_rows = (
+    purchase_open_rows = (
         db.query(
             PurchaseAllocationItem.sku_id,
             PurchaseAllocationItem.sku_code,
@@ -134,14 +135,40 @@ def replenishment(
         .group_by(PurchaseAllocationItem.sku_id, PurchaseAllocationItem.sku_code)
         .all()
     )
-    open_by_id: dict[int, Decimal] = {}
-    open_by_code: dict[str, Decimal] = {}
-    for sku_id, sku_code, quantity in open_rows:
+    purchase_open_by_id: dict[int, Decimal] = {}
+    purchase_open_by_code: dict[str, Decimal] = {}
+    for sku_id, sku_code, quantity in purchase_open_rows:
         qty = to_decimal(quantity)
         if sku_id is not None:
-            open_by_id[int(sku_id)] = open_by_id.get(int(sku_id), Decimal("0")) + qty
+            purchase_open_by_id[int(sku_id)] = purchase_open_by_id.get(int(sku_id), Decimal("0")) + qty
         elif sku_code:
-            open_by_code[sku_code] = open_by_code.get(sku_code, Decimal("0")) + qty
+            purchase_open_by_code[sku_code] = purchase_open_by_code.get(sku_code, Decimal("0")) + qty
+
+    production_open_rows = (
+        db.query(
+            ProductionOrderItem.sku_id,
+            ProductionOrderItem.sku_code,
+            func.coalesce(
+                func.sum(ProductionOrderItem.quantity - ProductionOrderItem.completed_qty),
+                0,
+            ),
+        )
+        .join(ProductionOrder, ProductionOrder.id == ProductionOrderItem.production_order_id)
+        .filter(
+            ProductionOrder.status.in_(OPEN_PRODUCTION_STATUSES),
+            ProductionOrderItem.quantity > ProductionOrderItem.completed_qty,
+        )
+        .group_by(ProductionOrderItem.sku_id, ProductionOrderItem.sku_code)
+        .all()
+    )
+    production_open_by_id: dict[int, Decimal] = {}
+    production_open_by_code: dict[str, Decimal] = {}
+    for sku_id, sku_code, quantity in production_open_rows:
+        qty = to_decimal(quantity)
+        if sku_id is not None:
+            production_open_by_id[int(sku_id)] = production_open_by_id.get(int(sku_id), Decimal("0")) + qty
+        elif sku_code:
+            production_open_by_code[sku_code] = production_open_by_code.get(sku_code, Decimal("0")) + qty
 
     query = (
         db.query(ProductSku, Product)
@@ -166,7 +193,15 @@ def replenishment(
 
     for sku, product in query.limit(limit).all():
         sold = sales_by_id.get(sku.id, sales_by_code.get(sku.sku_code, Decimal("0")))
-        open_supply = open_by_id.get(sku.id, open_by_code.get(sku.sku_code, Decimal("0")))
+        purchase_open = purchase_open_by_id.get(
+            sku.id,
+            purchase_open_by_code.get(sku.sku_code, Decimal("0")),
+        )
+        production_open = production_open_by_id.get(
+            sku.id,
+            production_open_by_code.get(sku.sku_code, Decimal("0")),
+        )
+        open_supply = purchase_open + production_open
         current = inventory_by_sku.get(sku.id)
         avg_daily = sold / Decimal(days) if sold > 0 else Decimal("0")
 
@@ -215,6 +250,8 @@ def replenishment(
             "currentInventory": _qty(current),
             "soldQuantity": _qty(sold),
             "averageDailySales": _qty(avg_daily),
+            "purchaseOpenSupplyQuantity": _qty(purchase_open),
+            "productionOpenSupplyQuantity": _qty(production_open),
             "openSupplyQuantity": _qty(open_supply),
             "targetStock": _qty(target_stock),
             "suggestedReplenishment": _qty(suggested),
