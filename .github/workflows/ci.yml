@@ -48,6 +48,16 @@ jobs:
       - name: Migrate
         run: |
           cd backend && alembic upgrade head
+      - name: Validate ops scripts and FK orphan audit
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+        run: |
+          bash -n scripts/*.sh
+          bash scripts/orphan-audit.sh
       - name: Lint new core changes (blocking)
         run: |
           cd backend && python -m pyflakes \
