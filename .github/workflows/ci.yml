@@ -36,11 +36,11 @@ jobs:
       APP_SECRET_KEY: ci-only-test-secret-not-for-production-2026
       JACKYUN_SYNC_MODE: manual
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Secret scan (blocking)
         run: |
           bash scripts/secret-scan.sh
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -133,8 +133,8 @@ jobs:
     name: Frontend (typecheck + static build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -154,7 +154,7 @@ jobs:
     name: Deployment image (single-port 8000)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate compose topology
         run: |
           cp .env.example .env
