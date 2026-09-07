@@ -61,8 +61,15 @@ fi
 echo "==> 恢复成功，public 表数量：$TABLE_COUNT"
 
 # 用当前代码对恢复库执行 Alembic upgrade head，验证老备份可以迁移到当前版本。
-ALEMBIC="$ROOT/backend/.venv/bin/alembic"
-if [[ -x "$ALEMBIC" ]]; then
+# 本机优先使用项目 venv；CI/容器可退回 PATH 中已安装的 alembic。
+ALEMBIC=""
+if [[ -x "$ROOT/backend/.venv/bin/alembic" ]]; then
+  ALEMBIC="$ROOT/backend/.venv/bin/alembic"
+elif command -v alembic >/dev/null 2>&1; then
+  ALEMBIC="$(command -v alembic)"
+fi
+
+if [[ -n "$ALEMBIC" ]]; then
   export DATABASE_URL="postgresql+psycopg://${USER}:${POSTGRES_PASSWORD:-}@${HOST}:${PORT}/${CHECK_DB}"
   (
     cd "$ROOT/backend"
@@ -71,7 +78,8 @@ if [[ -x "$ALEMBIC" ]]; then
   )
   echo "==> 当前代码迁移兼容性：通过"
 else
-  echo "==> 未发现 backend/.venv/bin/alembic，仅完成数据库恢复验证，跳过迁移兼容检查"
+  echo "缺少 alembic，无法验证恢复库与当前代码的迁移兼容性"
+  exit 2
 fi
 
 LATEST_DATA="$(ls -1t "$BACKUP_DIR"/data_*.tar.gz 2>/dev/null | head -1 || true)"
