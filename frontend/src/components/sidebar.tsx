@@ -14,6 +14,8 @@ const NAV: NavItem[] = [
   { href: "/supply-chain", label: "供应链中心", phase: null, group: true },
   { href: "/supply-chain/production", label: "生产订单", phase: null, nested: true },
   { href: "/supply-chain/material-flow", label: "耗材流转", phase: null, nested: true },
+  { href: "/supply-chain/in-transit", label: "生产执行 / 在途", phase: null, nested: true },
+  { href: "/supply-chain/receiving", label: "到货入库", phase: null, nested: true },
   { href: "/purchase/workbench", label: "采购订单", phase: 3, nested: true },
   { href: "/products/inventory-goods", label: "正品库存", phase: null, nested: true },
   { href: "/products/inventory-consumables", label: "耗材管理", phase: null, nested: true },
