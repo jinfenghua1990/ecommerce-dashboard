@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 老业务表 ForeignKey 补强前的只读孤儿数据审计。
-# 不修改任何数据；发现孤儿记录时以非 0 退出，禁止直接加 FK。
+# 老业务表 ForeignKey / 多态引用补强前的只读孤儿数据审计。
+# 不修改任何数据；发现孤儿记录时以非 0 退出，禁止直接加 FK 或假设链路完整。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,8 +24,7 @@ PSQL=(psql -X -v ON_ERROR_STOP=1 \
 
 SQL="
 WITH checks AS (
-  SELECT 'consumable_sku_mappings.sku_id -> product_skus.id' AS relation,
-         m.id
+  SELECT 'consumable_sku_mappings.sku_id -> product_skus.id' AS relation, m.id
   FROM consumable_sku_mappings m
   LEFT JOIN product_skus p ON p.id = m.sku_id
   WHERE p.id IS NULL
@@ -59,6 +58,48 @@ WITH checks AS (
   FROM inbound_consumable_usages u
   LEFT JOIN jackyun_goods_documents d ON d.id = u.inbound_document_id
   WHERE d.id IS NULL
+
+  UNION ALL
+  SELECT 'sales_order_items.order_id -> sales_orders.id', i.id
+  FROM sales_order_items i
+  LEFT JOIN sales_orders o ON o.id = i.order_id
+  WHERE o.id IS NULL
+
+  UNION ALL
+  SELECT 'sales_order_items.sku_id -> product_skus.id', i.id
+  FROM sales_order_items i
+  LEFT JOIN product_skus p ON p.id = i.sku_id
+  WHERE i.sku_id IS NOT NULL AND p.id IS NULL
+
+  UNION ALL
+  SELECT 'shipments.order_id -> sales_orders.id', s.id
+  FROM shipments s
+  LEFT JOIN sales_orders o ON o.id = s.order_id
+  WHERE o.id IS NULL
+
+  UNION ALL
+  SELECT 'jackyun_goods_document_items.document_id -> jackyun_goods_documents.id', i.id
+  FROM jackyun_goods_document_items i
+  LEFT JOIN jackyun_goods_documents d ON d.id = i.document_id
+  WHERE d.id IS NULL
+
+  UNION ALL
+  SELECT 'jackyun_goods_document_items.matched_sku_id -> product_skus.id', i.id
+  FROM jackyun_goods_document_items i
+  LEFT JOIN product_skus p ON p.id = i.matched_sku_id
+  WHERE i.matched_sku_id IS NOT NULL AND p.id IS NULL
+
+  UNION ALL
+  SELECT 'procurement_chain_links.target_id(inbound) -> jackyun_goods_documents.id', l.id
+  FROM procurement_chain_links l
+  LEFT JOIN jackyun_goods_documents d ON d.id = l.target_id
+  WHERE l.target_type = 'inbound' AND d.id IS NULL
+
+  UNION ALL
+  SELECT 'procurement_chain_links.target_id(settlement) -> jackyun_purchase_settlements.id', l.id
+  FROM procurement_chain_links l
+  LEFT JOIN jackyun_purchase_settlements s ON s.id = l.target_id
+  WHERE l.target_type = 'settlement' AND s.id IS NULL
 ), ranked AS (
   SELECT relation, id, row_number() OVER (PARTITION BY relation ORDER BY id) AS rn
   FROM checks
@@ -69,7 +110,14 @@ WITH checks AS (
     ('consumable_transactions.consumable_id -> consumables.id'),
     ('inbound_consumable_usages.consumable_id -> consumables.id'),
     ('inbound_consumable_usages.link_id -> procurement_chain_links.id'),
-    ('inbound_consumable_usages.inbound_document_id -> jackyun_goods_documents.id')
+    ('inbound_consumable_usages.inbound_document_id -> jackyun_goods_documents.id'),
+    ('sales_order_items.order_id -> sales_orders.id'),
+    ('sales_order_items.sku_id -> product_skus.id'),
+    ('shipments.order_id -> sales_orders.id'),
+    ('jackyun_goods_document_items.document_id -> jackyun_goods_documents.id'),
+    ('jackyun_goods_document_items.matched_sku_id -> product_skus.id'),
+    ('procurement_chain_links.target_id(inbound) -> jackyun_goods_documents.id'),
+    ('procurement_chain_links.target_id(settlement) -> jackyun_purchase_settlements.id')
 )
 SELECT n.relation,
        count(r.id) AS orphan_count,
@@ -80,7 +128,7 @@ GROUP BY n.relation
 ORDER BY n.relation;
 "
 
-echo "==> ForeignKey orphan audit（只读）"
+echo "==> Referential-integrity orphan audit（只读）"
 "${PSQL[@]}" -P pager=off -c "$SQL"
 
 TOTAL_SQL="
@@ -90,13 +138,20 @@ SELECT
   (SELECT count(*) FROM consumable_transactions t LEFT JOIN consumables c ON c.id=t.consumable_id WHERE c.id IS NULL) +
   (SELECT count(*) FROM inbound_consumable_usages u LEFT JOIN consumables c ON c.id=u.consumable_id WHERE c.id IS NULL) +
   (SELECT count(*) FROM inbound_consumable_usages u LEFT JOIN procurement_chain_links l ON l.id=u.link_id WHERE l.id IS NULL) +
-  (SELECT count(*) FROM inbound_consumable_usages u LEFT JOIN jackyun_goods_documents d ON d.id=u.inbound_document_id WHERE d.id IS NULL);
+  (SELECT count(*) FROM inbound_consumable_usages u LEFT JOIN jackyun_goods_documents d ON d.id=u.inbound_document_id WHERE d.id IS NULL) +
+  (SELECT count(*) FROM sales_order_items i LEFT JOIN sales_orders o ON o.id=i.order_id WHERE o.id IS NULL) +
+  (SELECT count(*) FROM sales_order_items i LEFT JOIN product_skus p ON p.id=i.sku_id WHERE i.sku_id IS NOT NULL AND p.id IS NULL) +
+  (SELECT count(*) FROM shipments s LEFT JOIN sales_orders o ON o.id=s.order_id WHERE o.id IS NULL) +
+  (SELECT count(*) FROM jackyun_goods_document_items i LEFT JOIN jackyun_goods_documents d ON d.id=i.document_id WHERE d.id IS NULL) +
+  (SELECT count(*) FROM jackyun_goods_document_items i LEFT JOIN product_skus p ON p.id=i.matched_sku_id WHERE i.matched_sku_id IS NOT NULL AND p.id IS NULL) +
+  (SELECT count(*) FROM procurement_chain_links l LEFT JOIN jackyun_goods_documents d ON d.id=l.target_id WHERE l.target_type='inbound' AND d.id IS NULL) +
+  (SELECT count(*) FROM procurement_chain_links l LEFT JOIN jackyun_purchase_settlements s ON s.id=l.target_id WHERE l.target_type='settlement' AND s.id IS NULL);
 "
 TOTAL="$("${PSQL[@]}" -Atc "$TOTAL_SQL")"
 
 if [[ "$TOTAL" != "0" ]]; then
-  echo "==> 发现 $TOTAL 条孤儿引用：暂时禁止新增对应 ForeignKey。先核对/修复真实数据。"
+  echo "==> 发现 $TOTAL 条孤儿引用：暂时禁止新增对应 ForeignKey/约束。先核对并修复真实数据。"
   exit 1
 fi
 
-echo "==> 通过：上述老表未发现孤儿引用，可进入 ForeignKey migration 设计阶段。"
+echo "==> 通过：当前审计范围未发现孤儿引用，可进入约束 migration 设计阶段。"
