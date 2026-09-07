@@ -1,17 +1,28 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.api.deps import current_actor
 from app.db import get_db
 from app.models.catalog import InventorySnapshot, Product, ProductSku
+from app.models.production import ProductionOrder
 from app.models.purchase import ExternalPurchaseOrder, PurchaseAllocationItem
 from app.models.sales import SalesOrder, SalesOrderItem
+from app.services.production_service import (
+    PRODUCTION_STATUSES,
+    cancel_production_order,
+    create_production_order,
+    list_production_orders,
+    production_order_detail,
+    recalculate_production_materials,
+)
 from app.utils.money import to_decimal
 
 router = APIRouter(prefix="/supply-chain", tags=["supply-chain"])
@@ -23,6 +34,20 @@ OPEN_SUPPLY_STATUSES = {
     "shipped",
     "arrived",
 }
+
+
+class ProductionItemInput(BaseModel):
+    sku_id: int = Field(gt=0)
+    quantity: Decimal = Field(gt=0)
+
+
+class ProductionOrderCreateInput(BaseModel):
+    factory_name: str = Field(min_length=1, max_length=256)
+    planned_start_date: date | None = None
+    expected_delivery_date: date | None = None
+    source_type: str = Field(default="manual", max_length=32)
+    note: str = Field(default="", max_length=2000)
+    items: list[ProductionItemInput] = Field(min_length=1, max_length=200)
 
 
 def _qty(value: Decimal | None) -> str | None:
@@ -221,3 +246,72 @@ def replenishment(
         },
         "rows": rows,
     }
+
+
+@router.get("/production-orders")
+def production_orders(
+    status: str = Query("", max_length=24),
+    limit: int = Query(200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if status and status not in PRODUCTION_STATUSES:
+        raise HTTPException(status_code=400, detail="生产单状态不正确")
+    rows = list_production_orders(db, status=status, limit=limit)
+    return {
+        "rows": rows,
+        "summary": {
+            "count": len(rows),
+            "shortageCount": sum(1 for row in rows if row["materialShortageCount"] > 0),
+        },
+    }
+
+
+@router.get("/production-orders/{order_id}")
+def production_order(order_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    order = db.get(ProductionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="生产单不存在")
+    return production_order_detail(db, order)
+
+
+@router.post("/production-orders")
+def create_production(
+    payload: ProductionOrderCreateInput,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        order = create_production_order(
+            db,
+            factory_name=payload.factory_name,
+            items=[{"sku_id": item.sku_id, "quantity": item.quantity} for item in payload.items],
+            actor=current_actor(request),
+            planned_start_date=payload.planned_start_date,
+            expected_delivery_date=payload.expected_delivery_date,
+            source_type=payload.source_type,
+            note=payload.note,
+        )
+        return production_order_detail(db, order)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/production-orders/{order_id}/recalculate-materials")
+def recalculate_materials(order_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        order = recalculate_production_materials(db, order_id)
+        return production_order_detail(db, order)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/production-orders/{order_id}/cancel")
+def cancel_production(order_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        order = cancel_production_order(db, order_id)
+        return production_order_detail(db, order)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
