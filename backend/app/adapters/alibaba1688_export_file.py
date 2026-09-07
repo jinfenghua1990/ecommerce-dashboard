@@ -8,7 +8,6 @@ import io
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 
