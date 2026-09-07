@@ -37,6 +37,9 @@ jobs:
       JACKYUN_SYNC_MODE: manual
     steps:
       - uses: actions/checkout@v7
+      - name: Repository hygiene (blocking)
+        run: |
+          bash scripts/repo-hygiene.sh
       - name: Secret scan (blocking)
         run: |
           bash scripts/secret-scan.sh
