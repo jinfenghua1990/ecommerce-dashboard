@@ -20,6 +20,7 @@ const NAV: NavItem[] = [
   { href: "/profit", label: "利润", phase: 5 },
   { href: "/finance", label: "财务中心", phase: 4, group: true },
   { href: "/finance/tax-accounting", label: "税务做账", phase: null, nested: true },
+  { href: "/finance/tax-accounting/categories", label: "分类规则", phase: null, nested: true },
   { href: "/data-center-import", label: "数据中心导入", phase: null },
   { href: "/exceptions", label: "异常中心", phase: null },
   { href: "/automation", label: "自动化", phase: null },
