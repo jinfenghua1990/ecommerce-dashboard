@@ -207,15 +207,27 @@ def record_transaction(
         # 工厂收货：在途 → 工厂库存
         if transit - qty < 0:
             raise ValueError(f"在途库存不足（当前在途 {transit}），请先登记发往工厂")
+        tx_location = "factory"
         row.transit_qty = transit - qty
         row.factory_qty = factory_before + qty
     elif transaction_type == "consume":
-        # 允许领用后出现负库存：历史采购补录时不能阻断业务，界面会显示低库存，
-        # 后续采购入库或盘点调整再补齐；流水仍完整保留。
-        row.stock_qty = stock_before - qty
+        tx_location = location
+        if location == "factory":
+            if factory_before - qty < 0:
+                raise ValueError(f"工厂库存不足（当前工厂库存 {factory_before}），不能消耗 {qty}")
+            row.factory_qty = factory_before - qty
+        else:
+            # 自有仓历史补录允许暂时出现负库存，后续采购入库或盘点补齐。
+            row.stock_qty = stock_before - qty
         row.used_qty = to_decimal(row.used_qty) + qty
     elif transaction_type == "loss":
-        row.stock_qty = stock_before - qty
+        tx_location = location
+        if location == "factory":
+            if factory_before - qty < 0:
+                raise ValueError(f"工厂库存不足（当前工厂库存 {factory_before}），不能报损 {qty}")
+            row.factory_qty = factory_before - qty
+        else:
+            row.stock_qty = stock_before - qty
     else:  # stocktake / adjustment / manual：有符号差额
         tx_location = location
         if location == "factory":
