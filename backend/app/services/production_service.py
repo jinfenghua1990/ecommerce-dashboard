@@ -13,8 +13,26 @@ from app.models.production import ProductionMaterialReservation, ProductionOrder
 from app.utils.money import to_decimal
 
 
-OPEN_RESERVATION_STATUSES = {"planned", "confirmed", "producing"}
-PRODUCTION_STATUSES = {"planned", "confirmed", "producing", "completed", "cancelled"}
+OPEN_RESERVATION_STATUSES = {
+    "planned",
+    "confirmed",
+    "producing",
+    "produced",
+    "shipped",
+    "arrived",
+    "inbound",
+}
+PRODUCTION_STATUSES = {
+    "planned",
+    "confirmed",
+    "producing",
+    "produced",
+    "shipped",
+    "arrived",
+    "inbound",
+    "completed",
+    "cancelled",
+}
 
 
 def _qty(value: Decimal | None) -> str:
@@ -61,14 +79,26 @@ def _serialize_material(row: ProductionMaterialReservation) -> dict:
 
 
 def _serialize_item(row: ProductionOrderItem) -> dict:
+    planned = to_decimal(row.quantity)
+    completed = to_decimal(row.completed_qty)
+    shipped = to_decimal(row.shipped_qty)
+    arrived = to_decimal(row.arrived_qty)
+    inbound = to_decimal(row.inbound_qty)
     return {
         "id": row.id,
         "skuId": row.sku_id,
         "skuCode": row.sku_code,
         "skuName": row.sku_name,
         "unit": row.unit,
-        "quantity": _qty(row.quantity),
-        "completedQty": _qty(row.completed_qty),
+        "quantity": _qty(planned),
+        "completedQty": _qty(completed),
+        "remainingProductionQty": _qty(max(planned - completed, Decimal("0"))),
+        "factoryReadyQty": _qty(max(completed - shipped, Decimal("0"))),
+        "shippedQty": _qty(shipped),
+        "transitQty": _qty(max(shipped - arrived, Decimal("0"))),
+        "arrivedQty": _qty(arrived),
+        "pendingInboundQty": _qty(max(arrived - inbound, Decimal("0"))),
+        "inboundQty": _qty(inbound),
     }
 
 
@@ -255,6 +285,9 @@ def create_production_order(
                 unit=sku.unit or "",
                 quantity=quantities[sku_id],
                 completed_qty=Decimal("0"),
+                shipped_qty=Decimal("0"),
+                arrived_qty=Decimal("0"),
+                inbound_qty=Decimal("0"),
             )
         )
     db.flush()
@@ -280,8 +313,15 @@ def cancel_production_order(db: Session, order_id: int) -> ProductionOrder:
     order = db.scalar(select(ProductionOrder).where(ProductionOrder.id == order_id).with_for_update())
     if order is None:
         raise ValueError("生产单不存在")
-    if order.status == "completed":
-        raise ValueError("已完成生产单不能取消")
+    items = db.scalars(
+        select(ProductionOrderItem)
+        .where(ProductionOrderItem.production_order_id == order.id)
+        .order_by(ProductionOrderItem.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    if any(to_decimal(item.completed_qty) > 0 for item in items):
+        raise ValueError("该生产单已有成品生产完成记录，不能取消")
     materials = db.query(ProductionMaterialReservation).filter_by(production_order_id=order.id).all()
     if any(to_decimal(row.dispatched_qty) > 0 for row in materials):
         raise ValueError("该生产单已有耗材发往工厂，需先处理在途/退料后再取消")
