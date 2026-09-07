@@ -89,10 +89,9 @@ jobs:
       - name: Full backend test suite (blocking)
         run: |
           cd backend && python -m pytest app/tests -q --tb=short
-      - name: Code hygiene report
-        continue-on-error: true
+      - name: Pyflakes debt budget (blocking)
         run: |
-          cd backend && python -m pyflakes app
+          bash scripts/pyflakes-budget.sh 17
 
   frontend:
     name: Frontend (typecheck + static build)
