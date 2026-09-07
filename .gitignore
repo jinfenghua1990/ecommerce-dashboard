@@ -20,6 +20,11 @@ next-env.d.ts
 .DS_Store
 *.tsbuildinfo
 
+# 本地手工源码备份（版本恢复统一使用 Git）
+*.bak
+*.bak-*
+*.bak.*
+
 # 运维产物
 backups/
 
