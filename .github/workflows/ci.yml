@@ -34,6 +34,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/ecommerce
       REDIS_URL: redis://127.0.0.1:6379/0
       APP_SECRET_KEY: ci-only-test-secret-not-for-production-2026
+      JACKYUN_SYNC_MODE: manual
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,21 +48,25 @@ jobs:
       - name: Migrate
         run: |
           cd backend && alembic upgrade head
-      - name: Lint supply-chain changes (blocking)
+      - name: Lint new core changes (blocking)
         run: |
           cd backend && python -m pyflakes \
             app/api/v1/supply_chain.py \
             app/api/v1/supply_chain_material_flow.py \
             app/services/production_service.py \
             app/services/production_material_flow_service.py \
+            app/services/monthly_core.py \
+            app/services/closing.py \
             app/models/production.py \
             app/tests/test_supply_chain_production.py \
-            app/tests/test_supply_chain_material_flow.py
-      - name: Test supply-chain (blocking)
+            app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_monthly_core.py
+      - name: Test supply-chain and monthly core (blocking)
         run: |
           cd backend && python -m pytest \
             app/tests/test_supply_chain_production.py \
             app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_monthly_core.py \
             -q --tb=short
       - name: Legacy lint report (non-blocking until existing debt is cleaned)
         continue-on-error: true
@@ -79,7 +84,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install deps
