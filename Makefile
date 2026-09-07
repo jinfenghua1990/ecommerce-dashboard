@@ -7,7 +7,7 @@ VENV := $(BACKEND)/.venv
 LAUNCH_LABEL := gui/$(shell id -u)/com.gino.ecommerce-dashboard
 NATIVE_ENV = set -a; . "$(ROOT)/.env"; set +a; export DATABASE_URL="postgresql+psycopg://$$POSTGRES_USER:$$POSTGRES_PASSWORD@localhost:5432/$$POSTGRES_DB"; export REDIS_URL="redis://localhost:6379/0"; export DATA_DIR="$(ROOT)/data";
 
-.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
+.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc verify smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
 
 help: ## 列出所有 target
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -42,6 +42,11 @@ lint: ## 编译检查后端 Python 文件
 tsc: ## 前端类型检查
 	cd frontend && npx tsc --noEmit
 
+verify: migration-check orphan-audit lint test tsc ## 本地一键验收：真实库引用 + 迁移 + 后端 + 前端静态构建
+	cd frontend && npm run build
+	@test -f frontend/out/index.html
+	@echo "本地验收通过：migration / orphan audit / backend tests / TypeScript / static build 均正常。"
+
 smoke: ## 枚举公开 API 并做带鉴权 smoke test
 	./scripts/smoke.sh
 
@@ -60,7 +65,7 @@ backup: ## 备份 PostgreSQL 与 data/ 原始归档
 restore-check: ## 将最新备份恢复到临时库验证，生产库不做任何修改
 	bash ./scripts/restore-check.sh
 
-orphan-audit: ## 只读检查老耗材关联表孤儿引用，补 FK 前必须为 0
+orphan-audit: ## 只读检查关键业务表孤儿引用，补 FK/约束前必须为 0
 	bash ./scripts/orphan-audit.sh
 
 backup-schedule-install: ## 安装 macOS 每日备份 + 每周恢复演练 launchd 计划
