@@ -16,8 +16,10 @@ const METRICS: { key: string; label: string; money?: boolean; percent?: boolean 
   { key: "pendingReceive", label: "待回款", money: true },
 ];
 
+type MonthlyOverview = Overview & { period?: string };
+
 export default function OverviewPage() {
-  const [data, setData] = useState<Overview | null>(null);
+  const [data, setData] = useState<MonthlyOverview | null>(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -31,7 +33,12 @@ export default function OverviewPage() {
   return (
     <div>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">经营总览</h1>
+        <div>
+          <h1 className="text-xl font-semibold">经营总览</h1>
+          <div className="mt-1 text-xs text-gray-400">
+            {data.period ? `${data.period} 月度口径` : "月度口径"}
+          </div>
+        </div>
         <div className="text-xs text-gray-400">
           {data.phaseName} · 下一里程碑：{data.nextMilestone}
         </div>
@@ -53,7 +60,7 @@ export default function OverviewPage() {
               key={m.key}
               label={m.label}
               value={display}
-              hint={v === null || v === undefined ? "待业务数据落地（Phase 2/5）" : undefined}
+              hint={v === null || v === undefined ? "本月数据未完整落地" : undefined}
             />
           );
         })}
