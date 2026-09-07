@@ -70,18 +70,13 @@ def get_import_records(
     return service.list_import_records(db, import_id, limit=limit)
 
 
-@router.delete("/imports/{import_id}/records/{row_index}", status_code=204)
-def delete_import_row(
-    request: Request,
-    import_id: int,
-    row_index: int,
-    db: Session = Depends(get_db),
-) -> None:
-    """明细核对：删除单行（可恢复），对应发票同步从台账隐藏。"""
-    try:
-        service.delete_row(db, import_id, row_index, actor=current_actor(request))
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
+@router.delete("/imports/{import_id}/records/{row_index}")
+def delete_import_row(import_id: int, row_index: int) -> None:
+    """税务原始明细属于审计底稿，禁止删除；错误数据只能标异常/重新导入纠正。"""
+    raise HTTPException(
+        status_code=409,
+        detail="税务原始明细不可删除。请保留原始记录，通过异常标记、备注或重新导入正确文件进行纠正。",
+    )
 
 
 @router.post("/imports/{import_id}/records/{row_index}/restore")
@@ -91,6 +86,7 @@ def restore_import_row(
     row_index: int,
     db: Session = Depends(get_db),
 ) -> dict:
+    """仅用于恢复历史版本中曾被软删除的税务明细；新版本已禁止继续删除。"""
     try:
         row = service.restore_row(db, import_id, row_index, actor=current_actor(request))
     except LookupError as exc:
@@ -135,18 +131,13 @@ def reprocess_import(
     return result
 
 
-@router.delete("/imports/{import_id}", status_code=204)
-def soft_delete_import(
-    request: Request,
-    import_id: int,
-    db: Session = Depends(get_db),
-) -> None:
-    try:
-        service.soft_delete_import(db, import_id, actor=current_actor(request))
-    except LookupError as exc:
-        raise HTTPException(404, str(exc))
-    except LifecycleTransitionError as exc:
-        raise HTTPException(409, str(exc))
+@router.delete("/imports/{import_id}")
+def soft_delete_import(import_id: int) -> None:
+    """官方税务导入批次作为审计资料永久保留，禁止删除整个批次。"""
+    raise HTTPException(
+        status_code=409,
+        detail="官方税务导入批次不可删除。若导入错误，请保留原批次并重新导入正确文件，系统以有效批次和差异核对处理。",
+    )
 
 
 @router.post("/imports/{import_id}/restore")
@@ -155,6 +146,7 @@ def restore_import(
     import_id: int,
     db: Session = Depends(get_db),
 ) -> dict:
+    """仅用于恢复历史版本中曾被软删除的官方税务批次。"""
     try:
         row = service.restore_import(db, import_id, actor=current_actor(request))
     except LookupError as exc:
