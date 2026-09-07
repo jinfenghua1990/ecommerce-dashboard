@@ -25,6 +25,7 @@ from app.api.v1 import (
     sales_outbound,
     supply_chain,
     system,
+    tax_accounting,
     tax_invoices,
 )
 
@@ -54,3 +55,4 @@ api_router.include_router(closing.router)
 api_router.include_router(consumables.router)
 api_router.include_router(automation.router)
 api_router.include_router(tax_invoices.router)
+api_router.include_router(tax_accounting.router)
