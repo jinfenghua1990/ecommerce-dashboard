@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ReplenishmentPanel from "./replenishment-panel";
 
 type ModuleCard = {
   title: string;
@@ -11,9 +12,10 @@ type ModuleCard = {
 const MODULES: ModuleCard[] = [
   {
     title: "补货工作台",
-    description: "以库存、销量、在途和安全库存为起点，形成补货计划。下一迭代接入真实补货建议计算。",
-    status: "next",
-    badge: "核心入口",
+    description: "已经接入真实库存、近销数量和待供应数量，可按交期与安全天数动态计算建议补货。",
+    href: "#replenishment",
+    status: "available",
+    badge: "已接入",
   },
   {
     title: "采购订单",
@@ -103,10 +105,14 @@ export default function SupplyChainPage() {
         </div>
       </section>
 
+      <div id="replenishment" className="scroll-mt-24">
+        <ReplenishmentPanel />
+      </div>
+
       <section>
         <div className="mb-3">
           <h2 className="text-base font-semibold text-slate-900">功能模块</h2>
-          <p className="mt-1 text-xs text-slate-500">第一版先复用当前真实功能，不制造模拟库存、生产或在途数据。</p>
+          <p className="mt-1 text-xs text-slate-500">优先复用当前真实功能；生产、在途、到货将在后续迭代接真实业务表，不使用模拟数据。</p>
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {MODULES.map((module) => {
@@ -130,10 +136,10 @@ export default function SupplyChainPage() {
       <section className="rounded-2xl border border-slate-200 bg-slate-950 px-5 py-4 text-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white">V1.1 结构升级原则</div>
-            <div className="mt-1 text-xs leading-5 text-slate-400">保留现有采购、吉客云、1688、库存和耗材能力；新增供应链业务层，不直接删除历史代码和数据。</div>
+            <div className="text-sm font-semibold text-white">V1.2 补货工作台</div>
+            <div className="mt-1 text-xs leading-5 text-slate-400">库存取吉客云最新快照，近销取本地真实销售明细，待供应取已确认且尚未入库完成的采购分配数量。</div>
           </div>
-          <div className="text-xs text-slate-400">下一步：真实补货建议 → 生产订单 → 耗材预占 → 在途 → 到货入库</div>
+          <div className="text-xs text-slate-400">下一步：生产订单 → 耗材预占 → 在途 → 到货入库</div>
         </div>
       </section>
     </div>
