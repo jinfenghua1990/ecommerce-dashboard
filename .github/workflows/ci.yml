@@ -104,3 +104,16 @@ jobs:
         run: |
           cd frontend && npm run build
           test -f out/index.html
+
+  deployment:
+    name: Deployment image (single-port 8000)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose topology
+        run: |
+          cp .env.example .env
+          docker compose config -q
+      - name: Build unified production image
+        run: |
+          docker build -f Dockerfile -t ecommerce-dashboard:ci .
