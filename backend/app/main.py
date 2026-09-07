@@ -2,7 +2,7 @@ import os
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -67,7 +67,8 @@ def healthz() -> dict:
 def _resolve_static(rel_path: str) -> str | None:
     """把 clean URL 解析到 out/ 下的真实文件：/products -> products.html / products/index.html。"""
     if not rel_path or rel_path == "/":
-        return os.path.join(_FRONTEND_OUT, "index.html")
+        index_path = os.path.join(_FRONTEND_OUT, "index.html")
+        return index_path if os.path.isfile(index_path) else None
     cand = [
         os.path.join(_FRONTEND_OUT, rel_path),
         os.path.join(_FRONTEND_OUT, rel_path + ".html"),
@@ -79,23 +80,27 @@ def _resolve_static(rel_path: str) -> str | None:
     return None
 
 
-app.mount("/_next", StaticFiles(directory=os.path.join(_FRONTEND_OUT, "_next")), name="next-static")
+# 正式 8000 部署完成前端 build 后照常挂载；纯后端测试/迁移环境没有
+# frontend/out 时不应在 import FastAPI 应用阶段直接崩溃。
+_next_dir = os.path.join(_FRONTEND_OUT, "_next")
+if os.path.isdir(_next_dir):
+    app.mount("/_next", StaticFiles(directory=_next_dir), name="next-static")
 
 
 @app.get("/{full_path:path}")
 async def spa_fallback(full_path: str):
     # /api 与 /healthz 已在上方路由优先匹配，这里只兜底前端资源与 SPA 路由
     if full_path.startswith("api"):
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Not Found")
     file_path = _resolve_static(full_path)
     if file_path is None:
         # 带扩展名的缺失资源（图片/字体等）直接 404，避免误回 index.html
         if "." in full_path:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=404, detail="Not Found")
-        # 其余未知路径交给前端路由（SPA fallback）
-        file_path = os.path.join(_FRONTEND_OUT, "index.html")
+        # 其余未知路径交给前端路由（SPA fallback）；测试/后端-only 环境
+        # 若尚无前端产物，则明确 404，而不是 FileResponse 指向不存在文件。
+        index_path = os.path.join(_FRONTEND_OUT, "index.html")
+        if not os.path.isfile(index_path):
+            raise HTTPException(status_code=404, detail="Frontend build not available")
+        file_path = index_path
     return FileResponse(file_path)
