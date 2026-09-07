@@ -148,8 +148,8 @@ class ProductionInboundAllocation(Base, PkMixin, TimestampMixin):
     __tablename__ = "production_inbound_allocations"
     __table_args__ = (
         UniqueConstraint(
-            "production_order_item_id", "inbound_item_id",
-            name="uq_production_inbound_item_allocation",
+            "request_key", "production_order_item_id", "inbound_item_id",
+            name="uq_production_inbound_allocation_request",
         ),
         CheckConstraint("quantity > 0", name="ck_production_inbound_allocation_qty"),
         Index("ix_production_inbound_allocations_order_doc", "production_order_id", "inbound_document_id"),
