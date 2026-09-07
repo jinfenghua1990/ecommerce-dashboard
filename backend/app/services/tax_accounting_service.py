@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -155,24 +156,23 @@ def monthly_ledger(db: Session, year: int, month: int) -> dict[str, Any]:
     for link in links:
         links_by_invoice[link.invoice_id].append(link)
 
-    sales_order_ids = {
-        link.target_id
-        for link in links
-        if link.target_type == "sales_order"
-    }
-    sales_orders = {
-        row.id: row
-        for row in db.query(SalesOrder).filter(SalesOrder.id.in_(sales_order_ids)).all()
-    } if sales_order_ids else {}
-    sales_qty = {
-        int(order_id): to_decimal(quantity)
-        for order_id, quantity in (
-            db.query(SalesOrderItem.order_id, __import__("sqlalchemy").func.coalesce(__import__("sqlalchemy").func.sum(SalesOrderItem.quantity), 0))
-            .filter(SalesOrderItem.order_id.in_(sales_order_ids))
-            .group_by(SalesOrderItem.order_id)
-            .all()
-        )
-    } if sales_order_ids else {}
+    sales_order_ids = {link.target_id for link in links if link.target_type == "sales_order"}
+    sales_orders = (
+        {row.id: row for row in db.query(SalesOrder).filter(SalesOrder.id.in_(sales_order_ids)).all()}
+        if sales_order_ids else {}
+    )
+    sales_qty = (
+        {
+            int(order_id): to_decimal(quantity)
+            for order_id, quantity in (
+                db.query(SalesOrderItem.order_id, func.coalesce(func.sum(SalesOrderItem.quantity), 0))
+                .filter(SalesOrderItem.order_id.in_(sales_order_ids))
+                .group_by(SalesOrderItem.order_id)
+                .all()
+            )
+        }
+        if sales_order_ids else {}
+    )
 
     totals = {
         "output": {"amountExclTax": Decimal("0"), "taxAmount": Decimal("0"), "totalAmount": Decimal("0")},
@@ -207,8 +207,16 @@ def monthly_ledger(db: Session, year: int, month: int) -> dict[str, Any]:
                 business_refs.append(sales.order_no)
                 candidate = sales.paid_amount if sales.paid_amount is not None else sales.order_amount
                 if candidate is not None:
-                    business_amount = to_decimal(candidate) if business_amount is None else business_amount + to_decimal(candidate)
-                business_quantity = sales_qty.get(sales.id, Decimal("0")) if business_quantity is None else business_quantity + sales_qty.get(sales.id, Decimal("0"))
+                    business_amount = (
+                        to_decimal(candidate)
+                        if business_amount is None
+                        else business_amount + to_decimal(candidate)
+                    )
+                business_quantity = (
+                    sales_qty.get(sales.id, Decimal("0"))
+                    if business_quantity is None
+                    else business_quantity + sales_qty.get(sales.id, Decimal("0"))
+                )
 
         invoice_total = to_decimal(invoice.total_amount) if invoice.total_amount is not None else None
         invoice_quantity = _decimal(line["quantity"])
