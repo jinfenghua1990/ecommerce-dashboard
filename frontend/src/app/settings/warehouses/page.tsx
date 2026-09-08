@@ -13,6 +13,8 @@ type Warehouse = {
   isSellable: boolean;
   status: "active" | "inactive";
   note: string;
+  jackyunWarehouseId: string | null;
+  source: "jackyun" | "local";
 };
 
 type Draft = {
@@ -23,6 +25,7 @@ type Draft = {
   is_sellable: boolean;
   status: "active" | "inactive";
   note: string;
+  jackyun_warehouse_id: string;
 };
 
 const emptyDraft = (): Draft => ({
@@ -33,6 +36,7 @@ const emptyDraft = (): Draft => ({
   is_sellable: false,
   status: "active",
   note: "",
+  jackyun_warehouse_id: "",
 });
 
 const input = "h-9 rounded-md border border-slate-200 bg-white px-2 text-sm outline-none focus:border-indigo-400";
@@ -59,6 +63,7 @@ function toDraft(row: Warehouse): Draft {
     is_sellable: row.isSellable,
     status: row.status,
     note: row.note,
+    jackyun_warehouse_id: row.jackyunWarehouseId ?? "",
   };
 }
 
@@ -85,7 +90,7 @@ export default function WarehouseSettingsPage() {
     setBusyId(id); setError(""); setMessage("");
     try {
       await api(`/api/v1/warehouses/${id}`, { method: "PATCH", body: JSON.stringify(draft) });
-      setMessage("仓库配置已保存。后续采购、收货和库存流水继续引用这个仓库 ID。");
+      setMessage("仓库配置已保存。历史采购、收货和库存继续引用同一个仓库 ID。");
       await load();
     } catch (e) { setError(String(e)); }
     finally { setBusyId(null); }
@@ -106,12 +111,12 @@ export default function WarehouseSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-5 py-5">
+    <div className="mx-auto max-w-7xl px-5 py-5">
       <div className="sticky top-0 z-10 -mx-5 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-3 backdrop-blur">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs text-slate-400"><Link href="/settings" className="hover:text-indigo-600">设置</Link><span>/</span><span>仓库配置</span></div>
           <h1 className="mt-1 text-xl font-semibold text-slate-900">仓库配置</h1>
-          <p className="mt-1 text-xs text-slate-500">默认只有工厂仓库和 B2C 仓库；名称、用途、可售属性都可以自行修改，后续也可继续新增。</p>
+          <p className="mt-1 text-xs text-slate-500">默认工厂仓 + B2C 仓；全部可改、可新增、可停用。B2C 仓可绑定真实吉客云仓库 ID，工厂仓可留空。</p>
         </div>
         <button onClick={() => setAdding(true)} className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">+ 添加仓库</button>
       </div>
@@ -120,15 +125,15 @@ export default function WarehouseSettingsPage() {
       {error && <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
       <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full min-w-[980px] text-left text-sm">
+        <table className="w-full min-w-[1180px] text-left text-sm">
           <thead className="sticky top-[88px] bg-slate-50 text-xs text-slate-500">
-            <tr><th className="px-3 py-2.5">编码</th><th>仓库名称</th><th>类型</th><th>用途</th><th>参与可售</th><th>状态</th><th>备注</th><th className="pr-3 text-right">操作</th></tr>
+            <tr><th className="px-3 py-2.5">编码</th><th>仓库名称</th><th>类型</th><th>用途</th><th>吉客云仓ID</th><th>参与可售</th><th>状态</th><th>备注</th><th className="pr-3 text-right">操作</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {adding && <EditableRow draft={newRow} setDraft={setNewRow} busy={busyId === "new"} onSave={() => void create()} onCancel={() => { setAdding(false); setNewRow(emptyDraft()); }} />}
+            {adding && <EditableRow draft={newRow} setDraft={setNewRow} busy={busyId === "new"} source="local" onSave={() => void create()} onCancel={() => { setAdding(false); setNewRow(emptyDraft()); }} />}
             {rows.map((row) => {
               const draft = drafts[row.id] ?? toDraft(row);
-              return <EditableRow key={row.id} draft={draft} setDraft={(next) => patch(row.id, next)} busy={busyId === row.id} onSave={() => void save(row.id)} />;
+              return <EditableRow key={row.id} draft={draft} setDraft={(next) => patch(row.id, next)} busy={busyId === row.id} source={row.source} onSave={() => void save(row.id)} />;
             })}
           </tbody>
         </table>
@@ -136,25 +141,27 @@ export default function WarehouseSettingsPage() {
       </div>
 
       <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-6 text-slate-600">
-        <b>当前建议：</b>工厂仓库用于工厂耗材和工厂侧货品；B2C 仓库用于最终电商发货库存。停用仓库不会删除历史单据，只会禁止新业务继续选择它。
+        <b>当前建议：</b>工厂仓存放工厂耗材/工厂侧货品，不参与可售；B2C 仓承接吉客云正品库存并参与可售。停用仓库不会删除历史单据，只会禁止新业务继续选择它。
       </div>
     </div>
   );
 }
 
-function EditableRow({ draft, setDraft, busy, onSave, onCancel }: {
+function EditableRow({ draft, setDraft, busy, source, onSave, onCancel }: {
   draft: Draft;
-  setDraft: ((next: Draft) => void) | ((next: Partial<Draft>) => void);
+  setDraft: (next: Draft) => void;
   busy: boolean;
+  source: "jackyun" | "local";
   onSave: () => void;
   onCancel?: () => void;
 }) {
-  const change = (next: Partial<Draft>) => setDraft({ ...draft, ...next } as Draft);
+  const change = (next: Partial<Draft>) => setDraft({ ...draft, ...next });
   return <tr className={draft.status === "inactive" ? "bg-slate-50/70 text-slate-400" : ""}>
     <td className="px-3 py-2"><input value={draft.code} onChange={(e) => change({ code: e.target.value.toUpperCase() })} className={`${input} w-28 font-mono`} placeholder="FACTORY" /></td>
     <td><input value={draft.name} onChange={(e) => change({ name: e.target.value })} className={`${input} w-40`} placeholder="仓库名称" /></td>
     <td><select value={draft.warehouse_type} onChange={(e) => change({ warehouse_type: e.target.value as Draft["warehouse_type"] })} className={`${input} w-28`}><option value="factory">工厂仓</option><option value="b2c">B2C仓</option><option value="other">其他</option></select></td>
     <td><select value={draft.purpose} onChange={(e) => change({ purpose: e.target.value as Draft["purpose"] })} className={`${input} w-32`}><option value="both">正品 + 耗材</option><option value="goods">仅正品</option><option value="consumable">仅耗材</option></select></td>
+    <td><div className="flex items-center gap-1.5"><input value={draft.jackyun_warehouse_id} onChange={(e) => change({ jackyun_warehouse_id: e.target.value })} className={`${input} w-36 font-mono`} placeholder={draft.warehouse_type === "factory" ? "工厂仓留空" : "可选"} /><span className={`rounded px-1.5 py-0.5 text-[9px] ${source === "jackyun" ? "bg-teal-50 text-teal-600" : "bg-slate-100 text-slate-500"}`}>{source === "jackyun" ? "吉客云" : "本地"}</span></div></td>
     <td><label className="inline-flex items-center gap-2"><input type="checkbox" checked={draft.is_sellable} onChange={(e) => change({ is_sellable: e.target.checked })} /><span className="text-xs">{draft.is_sellable ? "是" : "否"}</span></label></td>
     <td><select value={draft.status} onChange={(e) => change({ status: e.target.value as Draft["status"] })} className={`${input} w-24`}><option value="active">启用</option><option value="inactive">停用</option></select></td>
     <td><input value={draft.note} onChange={(e) => change({ note: e.target.value })} className={`${input} w-full min-w-[180px]`} placeholder="可选备注" /></td>
