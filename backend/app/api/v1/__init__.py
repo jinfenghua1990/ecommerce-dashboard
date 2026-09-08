@@ -28,6 +28,7 @@ from app.api.v1 import (
     supply_chain_material_flow,
     system,
     tax_invoices,
+    warehouses,
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -56,5 +57,6 @@ api_router.include_router(supply_chain_finished_flow.router)
 api_router.include_router(opening.router)
 api_router.include_router(closing.router)
 api_router.include_router(consumables.router)
+api_router.include_router(warehouses.router)
 api_router.include_router(automation.router)
 api_router.include_router(tax_invoices.router)
