@@ -20,6 +20,7 @@ from app.api.v1 import (
     procurement_workbench,
     profit,
     purchase,
+    purchase_consistency,
     reconciliation,
     sales_file,
     sales_outbound,
@@ -31,6 +32,10 @@ from app.api.v1 import (
     tax_invoices,
     warehouses,
 )
+from app.services.procurement_consistency import install_purchase_guards
+
+# V1.6.3：在不改变历史 API 路径的前提下，为采购完成状态和多渠道订单幂等安装强校验。
+install_purchase_guards()
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
@@ -48,6 +53,7 @@ api_router.include_router(procurement_board.router)
 api_router.include_router(exceptions.router)
 api_router.include_router(finance.router)
 api_router.include_router(purchase.router)
+api_router.include_router(purchase_consistency.router)
 api_router.include_router(reconciliation.router)
 api_router.include_router(sales_outbound.router)
 api_router.include_router(profit.router)
