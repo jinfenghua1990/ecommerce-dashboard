@@ -96,7 +96,7 @@ export default function SupplyChainPage() {
             <p className="mt-1 text-sm text-slate-500">从库存判断到生产、采购、耗材、在途、到货和入库，一个入口完成。</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">V1.6.1 · 业务版</span>
+            <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">V1.6.2 · 业务版</span>
             <Link href="/supply-chain/production" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-indigo-700">
               新建生产单
             </Link>
@@ -179,7 +179,7 @@ export default function SupplyChainPage() {
       <section className="rounded-xl border border-slate-200 bg-slate-950 px-4 py-3 text-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-white">V1.6.1 供应链中心</div>
+            <div className="text-sm font-semibold text-white">V1.6.2 供应链中心</div>
             <div className="mt-1 text-xs leading-5 text-slate-400">
               采购、生产、耗材、仓库、在途、到货已统一到同一业务入口；历史兼容路由保留，但后续新增功能只围绕这一套主流程继续扩展。
             </div>
