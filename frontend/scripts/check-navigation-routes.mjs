@@ -50,21 +50,36 @@ if (hijacked.length) {
   process.exit(1);
 }
 
-// V1.6.1：旧 UI 页面只能保留兼容跳转，不允许再次恢复成第二套工作台。
+// V1.6.1：所有历史采购 UI 页面只能保留兼容跳转，不允许再次恢复成第二套工作台。
 const legacyRedirectPages = [
-  "src/app/purchase/workbench-v2/page.tsx",
+  "src/app/purchase/page.tsx",
+  "src/app/procurement-workbench/page.tsx",
+  "src/app/procurement-board/page.tsx",
+  "src/app/procurement-ledger/page.tsx",
+  "src/app/procurement-chain/page.tsx",
   "src/app/procurement-chain/detail/page.tsx",
+  "src/app/purchase/workbench-v2/page.tsx",
 ];
 
 const legacyUiErrors = [];
 for (const relativePath of legacyRedirectPages) {
   const filePath = path.join(root, relativePath);
-  if (!fs.existsSync(filePath)) continue;
+  if (!fs.existsSync(filePath)) {
+    legacyUiErrors.push(`${relativePath} 历史兼容入口缺失；请明确删除映射或恢复轻量跳转，不能留下悬空旧链接`);
+    continue;
+  }
   const content = fs.readFileSync(filePath, "utf8");
   const bytes = Buffer.byteLength(content, "utf8");
   if (bytes > 3000 || !content.includes("/purchase/workbench") || !content.includes("router.replace")) {
-    legacyUiErrors.push(`${relativePath} 必须仅保留新版采购工作台兼容跳转（当前 ${bytes} bytes）`);
+    legacyUiErrors.push(`${relativePath} 必须仅保留 V1.6.1 新采购工作台兼容跳转（当前 ${bytes} bytes）`);
   }
+}
+
+// 正式采购页自身不得再保留第二套 WorkbenchSidebar / V1.0 视觉外壳。
+const workbenchPath = path.join(root, "src/app/purchase/workbench/page.tsx");
+const workbench = fs.readFileSync(workbenchPath, "utf8");
+for (const marker of ["function WorkbenchSidebar(", "function SidebarLink(", "<WorkbenchSidebar ", "V1.0"]) {
+  if (workbench.includes(marker)) legacyUiErrors.push(`正式采购工作台仍含旧 UI 残留：${marker}`);
 }
 
 // 采购工作台只能承载采购域视图，禁止重新嵌入正式业务页面。
@@ -102,4 +117,4 @@ if (legacyUiErrors.length) {
   process.exit(1);
 }
 
-console.log(`导航与新版 UI 检查通过：${uniqueRoutes.length} 个侧栏入口均有页面；正式业务路由独立；旧 UI 仅保留兼容跳转。`);
+console.log(`导航与新版 UI 检查通过：${uniqueRoutes.length} 个侧栏入口均有页面；7 个旧采购入口仅保留跳转；正式采购页无旧侧栏；其它业务路由保持独立。`);
