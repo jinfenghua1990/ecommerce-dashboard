@@ -1,14 +1,14 @@
 """add configurable warehouse master and receipt references
 
 Revision ID: b9d4f6a8c2e1
-Revises: z8c1e4f6b8d0
+Revises: c4f8a2e6b9d1
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 revision = "b9d4f6a8c2e1"
-down_revision = "z8c1e4f6b8d0"
+down_revision = "c4f8a2e6b9d1"
 branch_labels = None
 depends_on = None
 
