@@ -10,15 +10,17 @@ def f(category: str):
     return SimpleNamespace(category=category)
 
 
-def test_incomplete_without_bank_file():
-    """规格 E2E 2：账期资料缺失 → INCOMPLETE → 不打包。"""
+def test_incomplete_without_required_monthly_files():
+    """新账期固定要求银行资料 + 系统生成的销售汇总。"""
     status, summary = evaluate_completeness([], DEFAULT_REQUIRED)
     assert status == "INCOMPLETE"
-    assert summary["missing"] == {"bank": 1}
+    assert summary["missing"] == {"bank": 1, "sales_summary": 1}
 
 
-def test_ready_with_bank_file():
-    status, summary = evaluate_completeness([f("bank")], DEFAULT_REQUIRED)
+def test_ready_with_bank_and_sales_summary():
+    status, summary = evaluate_completeness(
+        [f("bank"), f("sales_summary")], DEFAULT_REQUIRED
+    )
     assert status == "READY"
     assert summary["missing"] == {}
 
