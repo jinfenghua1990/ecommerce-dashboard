@@ -21,15 +21,12 @@ export default function SettingsPage() {
   const [jackyun, setJackyun] = useState<TestState>({ loading: false });
   const [opening, setOpening] = useState<OpeningData | null>(null);
   const [openMsg, setOpenMsg] = useState("");
-  // 期初录入表单
   const [oKind, setOKind] = useState("platform_receivable");
   const [oRef, setORef] = useState("");
   const [oAmount, setOAmount] = useState("");
   const [oQty, setOQty] = useState("");
   const [oNote, setONote] = useState("");
   const [oDate, setODate] = useState("");
-
-  // 修改密码
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwMsg, setPwMsg] = useState("");
@@ -101,6 +98,14 @@ export default function SettingsPage() {
       <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
         凭证只保存在服务器端（.env / 数据库加密），不回传前端。未配置的系统如实显示，不使用模拟数据伪装连接。
       </p>
+
+      <a href="/settings/warehouses" className="mt-6 flex max-w-3xl items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 transition hover:border-indigo-300 hover:bg-indigo-50">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">仓库配置</div>
+          <div className="mt-1 text-xs text-slate-500">默认工厂仓库 + B2C 仓库；可自行新增、改名、调整用途、参与可售或停用。</div>
+        </div>
+        <span className="text-sm font-medium text-indigo-600">进入配置 →</span>
+      </a>
 
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">账号安全 · 修改密码</div>
@@ -177,7 +182,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 1688 OAuth（规格 7.2：未配置如实显示等待，不伪造已连接） */}
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">1688 采购授权</div>
         <p className="mt-1 text-xs text-gray-400">
@@ -212,7 +216,6 @@ export default function SettingsPage() {
         请勿在路由器做端口转发，勿将 8000 暴露公网；如需公网访问，必须增加 TLS 和更严格的网络边界。
       </div>
 
-      {/* 期初初始化（规格 11） */}
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">期初初始化（一次性向导）</div>
         <p className="mt-1 text-xs text-gray-400">
