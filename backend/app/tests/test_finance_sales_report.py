@@ -80,9 +80,9 @@ def test_monthly_sales_report_uses_valid_sales_and_does_not_duplicate_order_valu
         "netAfterRefund": "80.00",
     }
     assert len(report["rows"]) == 2
-    assert report["rows"][0]["paid_amount"] == "100.0000"
+    assert report["rows"][0]["paid_amount"] == "100"
     assert report["rows"][1]["paid_amount"] == ""
-    assert report["rows"][0]["refund_amount"] == "20.0000"
+    assert report["rows"][0]["refund_amount"] == "20"
     assert report["rows"][1]["refund_amount"] == ""
     assert all(row["order_no"] == order_no for row in report["rows"])
 
