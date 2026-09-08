@@ -1,7 +1,7 @@
 from decimal import Decimal
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,29 +30,36 @@ class ProductSku(Base, PkMixin, TimestampMixin):
     product_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     jackyun_sku_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     sku_code: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
-    # 类型口径：single=单品 / bundle=套装 / virtual_bundle=虚拟组合套装（不同商品不同数量组合，ES 开头）
     product_type: Mapped[str] = mapped_column(String(16), default="single", nullable=False, index=True)
     sku_name: Mapped[str] = mapped_column(String(512), default="", index=True)
     barcode: Mapped[str] = mapped_column(String(128), default="", index=True)
     unit: Mapped[str] = mapped_column(String(32), default="")
     sale_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     default_cost: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
-    # fixed 为默认策略；dynamic 使用已确认入库/结算的实际成本。
     cost_mode: Mapped[str] = mapped_column(String(16), default="fixed", nullable=False)
     cost_tolerance_pct: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal("0.0200"), nullable=False)
-    # 税收分类编码（开票用，19 位；也兼容旧 10 位简称）
     tax_code: Mapped[str] = mapped_column(String(32), default="", server_default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="active")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class Warehouse(Base, PkMixin, TimestampMixin):
+    """统一仓库主档：吉客云真实仓 + 本平台工厂仓共用一张表。
+
+    jackyun_warehouse_id 为空表示本平台自定义仓（例如工厂仓）；有值表示可以直接
+    承接吉客云 InventorySnapshot。code/name/role 等字段由用户在设置页灵活维护。
+    """
+
     __tablename__ = "warehouses"
 
-    jackyun_warehouse_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(256), default="")
-    warehouse_type: Mapped[str] = mapped_column(String(64), default="")
-    status: Mapped[str] = mapped_column(String(32), default="active")
+    jackyun_warehouse_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    code: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), default="", index=True)
+    warehouse_type: Mapped[str] = mapped_column(String(64), default="other", index=True)
+    purpose: Mapped[str] = mapped_column(String(16), default="both")
+    is_sellable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
