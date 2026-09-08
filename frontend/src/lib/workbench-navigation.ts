@@ -28,8 +28,11 @@ export function parseWorkbenchView(value: string | null): WorkbenchView {
 
 /**
  * 仅兼容已经废弃的旧采购入口。
- * 正式业务页面（/、/sales、/products、/finance、/settings 等）必须保持独立路由，
+ * 正式业务页面（/、/sales、/products、/finance、/settings、库存等）必须保持独立路由，
  * 不允许再被统一重定向进 /purchase/workbench?view=…。
+ *
+ * 注意：侧栏正式入口会由 frontend/scripts/check-navigation-routes.mjs 在 CI 自动校验，
+ * 后续新增菜单时如果目标页面不存在或又被加入这里，CI 会直接失败。
  */
 const LEGACY_PURCHASE_VIEWS: Record<string, WorkbenchView> = {
   "/purchase": "orders",
