@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import current_actor
 from app.core.audit import audit
 from app.db import get_db
-from app.services import consumable_purchase_service as purchase_svc
+from app.services import warehouse_purchase_view as purchase_view
 from app.services import warehouse_receipt_service
 from app.services import warehouse_service as svc
 
@@ -129,4 +129,4 @@ def receive_consumable_purchase(
         row.id,
         {"warehouseId": body.warehouse_id, "requestKey": str(body.request_key)},
     )
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
