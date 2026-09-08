@@ -77,6 +77,10 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   planned: { label: "计划中", cls: "bg-slate-100 text-slate-700" },
   confirmed: { label: "已确认", cls: "bg-blue-50 text-blue-700" },
   producing: { label: "生产中", cls: "bg-indigo-50 text-indigo-700" },
+  produced: { label: "已生产", cls: "bg-violet-50 text-violet-700" },
+  shipped: { label: "已发货", cls: "bg-amber-50 text-amber-700" },
+  arrived: { label: "已到货", cls: "bg-cyan-50 text-cyan-700" },
+  inbound: { label: "部分入库", cls: "bg-teal-50 text-teal-700" },
   completed: { label: "已完成", cls: "bg-emerald-50 text-emerald-700" },
   cancelled: { label: "已取消", cls: "bg-slate-100 text-slate-400" },
 };
@@ -116,7 +120,6 @@ export default function ProductionPanel() {
   const [items, setItems] = useState<FormItem[]>([{ key: 1, skuId: "", quantity: "" }]);
   const [config, setConfig] = useState<ProductionConfig>(DEFAULT_CONFIG);
   const [configDraft, setConfigDraft] = useState<ProductionConfig>(DEFAULT_CONFIG);
-  const [showConfig, setShowConfig] = useState(false);
   const [importing, setImporting] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
 
@@ -183,7 +186,7 @@ export default function ProductionPanel() {
 
   const summary = useMemo(() => ({
     active: orders.filter((order) => !["completed", "cancelled"].includes(order.status)).length,
-    producing: orders.filter((order) => order.status === "producing").length,
+    producing: orders.filter((order) => ["producing", "produced", "shipped", "arrived", "inbound"].includes(order.status)).length,
     shortage: orders.filter((order) => order.materialShortageCount > 0 && order.status !== "cancelled").length,
   }), [orders]);
 
@@ -210,8 +213,7 @@ export default function ProductionPanel() {
     setConfig(next);
     if (!factoryName.trim() && next.defaultFactory) setFactoryName(next.defaultFactory);
     setConfigDraft(next);
-    setShowConfig(false);
-    setMessage("生产配置已保存并应用到本页补货/生产建议。");
+    setMessage("生产参数已保存并应用到补货与生产建议。");
   }
 
   async function import1688(event: React.ChangeEvent<HTMLInputElement>) {
@@ -305,94 +307,123 @@ export default function ProductionPanel() {
   }
 
   return (
-    <div className="mx-auto max-w-[1550px] space-y-5">
-      <header className="sticky top-0 z-20 -mx-8 -mt-6 flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 bg-white/95 px-8 py-5 backdrop-blur">
-        <div>
-          <div className="text-xs font-medium text-indigo-600">SUPPLY CHAIN / PRODUCTION</div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">生产订单</h1>
-          <p className="mt-1 text-sm text-slate-500">订单、新建、1688导入和生产参数都在本页完成</p>
+    <div className="mx-auto max-w-[1580px] space-y-4">
+      <header className="sticky top-0 z-20 -mx-8 -mt-6 border-b border-slate-200 bg-white/95 px-8 py-4 backdrop-blur">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="text-xs font-medium text-indigo-600">SUPPLY CHAIN / PRODUCTION</div>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">生产订单</h1>
+            <p className="mt-1 text-sm text-slate-500">生产参数、新建订单、耗材需求和执行入口全部在本页直接显示。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 ${importing ? "pointer-events-none opacity-50" : ""}`}>
+              {importing ? "导入中…" : "导入1688订单"}
+              <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={import1688} />
+            </label>
+            <Link href="/supply-chain/material-flow" className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50">耗材流转</Link>
+            <Link href="/supply-chain/in-transit" className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50">生产 / 在途</Link>
+            <Link href="/products" className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">货品档案</Link>
+            <Link href="/supply-chain/warehouses" className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">仓库</Link>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <label className={`cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 ${importing ? "pointer-events-none opacity-50" : ""}`}>
-            {importing ? "导入中…" : "导入1688订单"}
-            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={import1688} />
-          </label>
-          <button onClick={() => setShowConfig((value) => !value)} className="rounded-lg border border-indigo-200 px-3 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50">生产配置</button>
-          <Link href="/products" className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">货品档案</Link>
-          <Link href="/supply-chain/warehouses" className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">仓库</Link>
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          <span>进行中 <b className="ml-1 text-slate-900">{summary.active}</b></span>
+          <span>执行中 <b className="ml-1 text-indigo-700">{summary.producing}</b></span>
+          <span>缺料单 <b className={`ml-1 ${summary.shortage > 0 ? "text-red-700" : "text-slate-900"}`}>{summary.shortage}</b></span>
+          <span className="ml-auto text-[11px] text-slate-400">全部生产单与耗材需求默认展开</span>
         </div>
       </header>
 
-      {showConfig && <section className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="mr-auto"><h2 className="text-sm font-semibold text-slate-800">生产配置</h2><p className="mt-1 text-xs text-slate-500">只影响生产订单/补货建议；以后修改直接回本页，不放系统设置。</p></div>
-          <label className="text-[11px] text-slate-500">默认工厂<input value={configDraft.defaultFactory} onChange={(e) => setConfigDraft({ ...configDraft, defaultFactory: e.target.value })} placeholder="例如：美啡源" className="mt-1 block h-9 w-56 rounded-lg border border-slate-200 bg-white px-3 text-sm" /></label>
-          <label className="text-[11px] text-slate-500">销量观察天数<input type="number" min="7" max="180" value={configDraft.salesWindowDays} onChange={(e) => setConfigDraft({ ...configDraft, salesWindowDays: Number(e.target.value) })} className="mt-1 block h-9 w-28 rounded-lg border border-slate-200 bg-white px-3 text-sm" /></label>
-          <label className="text-[11px] text-slate-500">生产交期<input type="number" min="1" max="120" value={configDraft.leadDays} onChange={(e) => setConfigDraft({ ...configDraft, leadDays: Number(e.target.value) })} className="mt-1 block h-9 w-24 rounded-lg border border-slate-200 bg-white px-3 text-sm" /></label>
-          <label className="text-[11px] text-slate-500">安全天数<input type="number" min="0" max="90" value={configDraft.safetyDays} onChange={(e) => setConfigDraft({ ...configDraft, safetyDays: Number(e.target.value) })} className="mt-1 block h-9 w-24 rounded-lg border border-slate-200 bg-white px-3 text-sm" /></label>
-          <button onClick={saveConfig} className="h-9 rounded-lg bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700">保存并应用</button>
-        </div>
-      </section>}
-
-      {message && <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div>}
-      {error && <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">新建生产单</h2>
-            <p className="mt-1 text-xs text-slate-500">创建后按货品档案里的耗材关联自动计算需求；当前建议参数：近 {config.salesWindowDays} 天销量 / 交期 {config.leadDays} 天 / 安全 {config.safetyDays} 天。</p>
+      <section className="rounded-xl border border-indigo-100 bg-indigo-50/30 px-4 py-3">
+        <div className="flex flex-wrap items-end gap-2.5">
+          <div className="mr-auto min-w-[180px]">
+            <h2 className="text-sm font-semibold text-slate-800">生产参数</h2>
+            <p className="mt-1 text-[11px] text-slate-500">常驻显示，不再折叠。</p>
           </div>
-          <div className="flex gap-5 text-right text-xs text-slate-500">
-            <div><div className="text-xl font-semibold text-slate-900">{summary.active}</div>进行中</div>
-            <div><div className="text-xl font-semibold text-indigo-700">{summary.producing}</div>生产中</div>
-            <div><div className="text-xl font-semibold text-red-700">{summary.shortage}</div>缺料单</div>
-          </div>
-        </div>
-
-        <div className="grid gap-3 xl:grid-cols-[1.1fr_150px_150px_1.8fr_auto]">
-          <label className="text-[11px] text-slate-500">工厂名称
-            <input value={factoryName} onChange={(e) => setFactoryName(e.target.value)} placeholder="例如：深圳市美啡源实业有限公司" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400" />
+          <label className="text-[10px] text-slate-500">默认工厂
+            <input value={configDraft.defaultFactory} onChange={(event) => setConfigDraft({ ...configDraft, defaultFactory: event.target.value })} placeholder="例如：美啡源" className="mt-1 block h-8 w-52 rounded-md border border-slate-200 bg-white px-2.5 text-xs" />
           </label>
-          <label className="text-[11px] text-slate-500">计划开始<input type="date" value={plannedStartDate} onChange={(e) => setPlannedStartDate(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700" /></label>
-          <label className="text-[11px] text-slate-500">预计交货<input type="date" value={expectedDeliveryDate} onChange={(e) => setExpectedDeliveryDate(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700" /></label>
-          <label className="text-[11px] text-slate-500">备注<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="生产要求、批次、包装说明等" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400" /></label>
-          <button onClick={createOrder} disabled={saving} className="self-end rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">{saving ? "创建中…" : "创建生产单"}</button>
-        </div>
-
-        <div className="mt-3 space-y-2">
-          {items.map((item, index) => (
-            <div key={item.key} className="grid gap-2 rounded-xl bg-slate-50 p-2 md:grid-cols-[42px_1fr_160px_70px]">
-              <div className="self-center text-center text-xs font-semibold text-slate-400">{index + 1}</div>
-              <select value={item.skuId} onChange={(e) => updateItem(item.key, "skuId", e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"><option value="">选择正品 SKU</option>{skuOptions.map((sku) => (<option key={sku.skuId} value={sku.skuId}>{sku.goodsName || sku.skuName || sku.skuCode} · {sku.skuCode}</option>))}</select>
-              <input type="number" min="0.0001" step="1" value={item.quantity} onChange={(e) => updateItem(item.key, "quantity", e.target.value)} placeholder="生产数量" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700" />
-              <button type="button" onClick={() => removeItem(item.key)} disabled={items.length === 1} className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-30">删除</button>
-            </div>
-          ))}
-          <button type="button" onClick={addItem} className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700">+ 添加 SKU</button>
+          <label className="text-[10px] text-slate-500">销量观察
+            <div className="mt-1 flex items-center gap-1"><input type="number" min="7" max="180" value={configDraft.salesWindowDays} onChange={(event) => setConfigDraft({ ...configDraft, salesWindowDays: Number(event.target.value) })} className="h-8 w-20 rounded-md border border-slate-200 bg-white px-2 text-xs" /><span>天</span></div>
+          </label>
+          <label className="text-[10px] text-slate-500">生产交期
+            <div className="mt-1 flex items-center gap-1"><input type="number" min="1" max="120" value={configDraft.leadDays} onChange={(event) => setConfigDraft({ ...configDraft, leadDays: Number(event.target.value) })} className="h-8 w-20 rounded-md border border-slate-200 bg-white px-2 text-xs" /><span>天</span></div>
+          </label>
+          <label className="text-[10px] text-slate-500">安全库存
+            <div className="mt-1 flex items-center gap-1"><input type="number" min="0" max="90" value={configDraft.safetyDays} onChange={(event) => setConfigDraft({ ...configDraft, safetyDays: Number(event.target.value) })} className="h-8 w-20 rounded-md border border-slate-200 bg-white px-2 text-xs" /><span>天</span></div>
+          </label>
+          <button onClick={saveConfig} className="h-8 rounded-md bg-indigo-600 px-3 text-xs font-medium text-white hover:bg-indigo-700">保存参数</button>
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div><h2 className="text-base font-semibold text-slate-900">生产单列表</h2><p className="mt-1 text-xs text-slate-500">内容全部展开显示；缺料会直接标红，不隐藏在详情页。</p></div>
-          <button onClick={load} disabled={loading} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">{loading ? "刷新中…" : "刷新"}</button>
+      {message && <div className="rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div>}
+      {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">新建生产单</h2>
+            <p className="mt-1 text-[11px] text-slate-500">创建后按货品档案的正品-耗材关联自动计算需求；当前参数：近 {config.salesWindowDays} 天 / 交期 {config.leadDays} 天 / 安全 {config.safetyDays} 天。</p>
+          </div>
+        </div>
+
+        <div className="grid gap-2.5 xl:grid-cols-[1.1fr_145px_145px_1.6fr_auto]">
+          <label className="text-[10px] text-slate-500">工厂名称
+            <input value={factoryName} onChange={(event) => setFactoryName(event.target.value)} placeholder="例如：深圳市美啡源实业有限公司" className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm text-slate-700 outline-none focus:border-indigo-400" />
+          </label>
+          <label className="text-[10px] text-slate-500">计划开始<input type="date" value={plannedStartDate} onChange={(event) => setPlannedStartDate(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-2 text-xs text-slate-700" /></label>
+          <label className="text-[10px] text-slate-500">预计交货<input type="date" value={expectedDeliveryDate} onChange={(event) => setExpectedDeliveryDate(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-2 text-xs text-slate-700" /></label>
+          <label className="text-[10px] text-slate-500">备注<input value={note} onChange={(event) => setNote(event.target.value)} placeholder="生产要求、批次、包装说明等" className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm text-slate-700 outline-none focus:border-indigo-400" /></label>
+          <button onClick={createOrder} disabled={saving} className="h-9 self-end rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">{saving ? "创建中…" : "创建生产单"}</button>
+        </div>
+
+        <div className="mt-3 space-y-1.5">
+          {items.map((item, index) => (
+            <div key={item.key} className="grid items-center gap-2 md:grid-cols-[30px_1fr_150px_58px]">
+              <div className="text-center text-[11px] font-semibold text-slate-400">{index + 1}</div>
+              <select value={item.skuId} onChange={(event) => updateItem(item.key, "skuId", event.target.value)} className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+                <option value="">选择正品 SKU</option>
+                {skuOptions.map((sku) => <option key={sku.skuId} value={sku.skuId}>{sku.goodsName || sku.skuName || sku.skuCode} · {sku.skuCode}</option>)}
+              </select>
+              <input type="number" min="0.0001" step="1" value={item.quantity} onChange={(event) => updateItem(item.key, "quantity", event.target.value)} placeholder="生产数量" className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700" />
+              <button type="button" onClick={() => removeItem(item.key)} disabled={items.length === 1} className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-30">删除</button>
+            </div>
+          ))}
+          <button type="button" onClick={addItem} className="ml-[38px] rounded-md border border-dashed border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-700">+ 添加 SKU</button>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+          <div><h2 className="text-sm font-semibold text-slate-900">生产单列表</h2><p className="mt-1 text-[11px] text-slate-500">内容全部展开；缺料直接标红，生产推进后从“生产 / 在途”继续操作。</p></div>
+          <button onClick={load} disabled={loading} className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50">{loading ? "刷新中…" : "刷新"}</button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1350px] text-sm">
-            <thead className="bg-slate-50 text-left text-[11px] font-medium text-slate-500"><tr><th className="px-4 py-3">生产单</th><th className="px-4 py-3">工厂</th><th className="px-4 py-3">状态</th><th className="px-4 py-3">生产内容</th><th className="px-4 py-3">耗材需求 / 预占</th><th className="px-4 py-3">计划 / 交货</th><th className="px-4 py-3">操作</th></tr></thead>
+          <table className="w-full min-w-[1380px] text-sm">
+            <thead className="bg-slate-50 text-left text-[11px] font-medium text-slate-500">
+              <tr><th className="px-4 py-2.5">生产单</th><th className="px-4 py-2.5">工厂</th><th className="px-4 py-2.5">状态</th><th className="px-4 py-2.5">生产内容</th><th className="px-4 py-2.5">耗材需求 / 预占</th><th className="px-4 py-2.5">计划 / 交货</th><th className="px-4 py-2.5">操作</th></tr>
+            </thead>
             <tbody className="divide-y divide-slate-100">
               {orders.map((order) => {
                 const status = STATUS[order.status] ?? { label: order.status, cls: "bg-slate-100 text-slate-600" };
                 return (
-                  <tr key={order.id} className={order.status === "cancelled" ? "bg-slate-50/60" : "bg-white"}>
-                    <td className="px-4 py-4 align-top"><div className="font-mono text-xs font-semibold text-slate-800">{order.orderNo}</div><div className="mt-1 text-[10px] text-slate-400">{order.createdAt ? new Date(order.createdAt).toLocaleString("zh-CN") : ""}</div></td>
-                    <td className="max-w-[200px] px-4 py-4 align-top"><div className="font-medium text-slate-700">{order.factoryName}</div>{order.note && <div className="mt-1 line-clamp-2 text-xs text-slate-400">{order.note}</div>}</td>
-                    <td className="px-4 py-4 align-top"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${status.cls}`}>{status.label}</span>{order.materialShortageCount > 0 && order.status !== "cancelled" && <div className="mt-2 text-[10px] font-medium text-red-600">{order.materialShortageCount} 项缺料</div>}</td>
-                    <td className="max-w-[300px] px-4 py-4 align-top"><div className="space-y-1.5">{order.items.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 text-xs"><span className="truncate text-slate-600">{item.skuName || item.skuCode}</span><span className="shrink-0 font-medium tabular-nums text-slate-800">{qty(item.quantity)} {item.unit}</span></div>)}</div></td>
-                    <td className="max-w-[400px] px-4 py-4 align-top">{order.materials.length === 0 ? <div className="text-xs text-amber-600">该生产内容尚未关联耗材</div> : <div className="space-y-1.5">{order.materials.map((material) => <div key={material.id} className={`grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg px-2 py-1.5 text-xs ${material.state === "shortage" ? "bg-red-50" : "bg-slate-50"}`}><span className="truncate text-slate-600">{material.name} <span className="text-[10px] text-slate-400">{material.code}</span></span><span className="tabular-nums text-slate-700">需 {qty(material.requiredQty)} / 占 {qty(material.reservedQty)}</span><span className={material.state === "shortage" ? "font-medium text-red-700" : "text-emerald-700"}>{MATERIAL_STATE[material.state]}{Number(material.shortageQty) > 0 ? ` ${qty(material.shortageQty)}` : ""}</span></div>)}</div>}</td>
-                    <td className="px-4 py-4 align-top text-xs text-slate-600"><div>开始：{order.plannedStartDate || "—"}</div><div className="mt-1">交货：{order.expectedDeliveryDate || "—"}</div></td>
-                    <td className="px-4 py-4 align-top"><div className="flex flex-wrap gap-2">{["planned", "confirmed"].includes(order.status) && <button onClick={() => recalculate(order.id)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50">重算耗材</button>}{!["completed", "cancelled"].includes(order.status) && <button onClick={() => cancel(order.id)} className="rounded-md border border-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50">取消</button>}</div></td>
+                  <tr key={order.id} className={order.status === "cancelled" ? "bg-slate-50/60" : "bg-white hover:bg-slate-50/50"}>
+                    <td className="px-4 py-3 align-top"><div className="font-mono text-xs font-semibold text-slate-800">{order.orderNo}</div><div className="mt-1 text-[10px] text-slate-400">{order.createdAt ? new Date(order.createdAt).toLocaleString("zh-CN") : ""}</div></td>
+                    <td className="max-w-[200px] px-4 py-3 align-top"><div className="font-medium text-slate-700">{order.factoryName}</div>{order.note && <div className="mt-1 line-clamp-2 text-xs text-slate-400">{order.note}</div>}</td>
+                    <td className="px-4 py-3 align-top"><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${status.cls}`}>{status.label}</span>{order.materialShortageCount > 0 && order.status !== "cancelled" && <div className="mt-2 text-[10px] font-medium text-red-600">{order.materialShortageCount} 项缺料</div>}</td>
+                    <td className="max-w-[300px] px-4 py-3 align-top"><div className="space-y-1.5">{order.items.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 text-xs"><span className="truncate text-slate-600">{item.skuName || item.skuCode}</span><span className="shrink-0 font-medium tabular-nums text-slate-800">{qty(item.quantity)} {item.unit}</span></div>)}</div></td>
+                    <td className="max-w-[400px] px-4 py-3 align-top">
+                      {order.materials.length === 0 ? <div className="text-xs text-amber-600">该生产内容尚未关联耗材</div> : <div className="space-y-1.5">{order.materials.map((material) => <div key={material.id} className={`grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-md px-2 py-1.5 text-xs ${material.state === "shortage" ? "bg-red-50" : "bg-slate-50"}`}><span className="truncate text-slate-600">{material.name} <span className="text-[10px] text-slate-400">{material.code}</span></span><span className="tabular-nums text-slate-700">需 {qty(material.requiredQty)} / 占 {qty(material.reservedQty)}</span><span className={material.state === "shortage" ? "font-medium text-red-700" : "text-emerald-700"}>{MATERIAL_STATE[material.state]}{Number(material.shortageQty) > 0 ? ` ${qty(material.shortageQty)}` : ""}</span></div>)}</div>}
+                    </td>
+                    <td className="px-4 py-3 align-top text-xs text-slate-600"><div>开始：{order.plannedStartDate || "—"}</div><div className="mt-1">交货：{order.expectedDeliveryDate || "—"}</div></td>
+                    <td className="px-4 py-3 align-top">
+                      <div className="flex flex-wrap gap-1.5">
+                        {["planned", "confirmed"].includes(order.status) && <button onClick={() => recalculate(order.id)} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50">重算耗材</button>}
+                        {!["completed", "cancelled"].includes(order.status) && <Link href="/supply-chain/in-transit" className="rounded-md border border-indigo-200 px-2 py-1 text-[11px] text-indigo-700 hover:bg-indigo-50">去执行</Link>}
+                        {!["completed", "cancelled"].includes(order.status) && <button onClick={() => cancel(order.id)} className="rounded-md border border-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50">取消</button>}
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
