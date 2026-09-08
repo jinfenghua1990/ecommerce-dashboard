@@ -1,17 +1,38 @@
-export const WORKBENCH_VIEWS = {
+type PurchaseWorkbenchView = "orders" | "suppliers" | "chain" | "matching" | "tax";
+
+// 仅为兼容正式采购页中尚待清理的旧侧栏死代码类型；这些值不会进入新版菜单、URL 解析或运行时视图。
+type LegacyWorkbenchView =
+  | "imports"
+  | "dashboard"
+  | "sales"
+  | "products"
+  | "inventory_goods"
+  | "inventory_consumables"
+  | "payments"
+  | "profit"
+  | "finance"
+  | "exceptions"
+  | "automation"
+  | "settings";
+
+export type WorkbenchView = PurchaseWorkbenchView | LegacyWorkbenchView;
+
+export const WORKBENCH_VIEWS: Partial<Record<WorkbenchView, string>> = {
   orders: "采购订单",
   suppliers: "供应商管理",
   chain: "采购链路",
   matching: "SKU 匹配",
   tax: "发票对账",
-} as const;
+};
 
-export type WorkbenchView = keyof typeof WORKBENCH_VIEWS;
+const ACTIVE_WORKBENCH_VIEWS = new Set<PurchaseWorkbenchView>(["orders", "suppliers", "chain", "matching", "tax"]);
 
-export function parseWorkbenchView(value: string | null): WorkbenchView {
-  // V1.6.1：采购工作台只允许采购域内部视图。
+export function parseWorkbenchView(value: string | null): PurchaseWorkbenchView {
+  // V1.6.1：运行时只允许采购域内部 5 个视图。
   // 历史 view=sales/products/finance/... 不再嵌套正式业务页面，统一回到采购订单。
-  return value && value in WORKBENCH_VIEWS ? (value as WorkbenchView) : "orders";
+  return value && ACTIVE_WORKBENCH_VIEWS.has(value as PurchaseWorkbenchView)
+    ? (value as PurchaseWorkbenchView)
+    : "orders";
 }
 
 /**
@@ -22,7 +43,7 @@ export function parseWorkbenchView(value: string | null): WorkbenchView {
  * 注意：侧栏正式入口会由 frontend/scripts/check-navigation-routes.mjs 在 CI 自动校验，
  * 后续新增菜单时如果目标页面不存在或又被加入这里，CI 会直接失败。
  */
-const LEGACY_PURCHASE_VIEWS: Record<string, WorkbenchView> = {
+const LEGACY_PURCHASE_VIEWS: Record<string, PurchaseWorkbenchView> = {
   "/purchase": "orders",
   "/procurement-workbench": "orders",
   "/procurement-board": "orders",
