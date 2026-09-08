@@ -166,9 +166,14 @@ def auto_confirm_inbound_link(link: ProcurementChainLink) -> bool:
 
 
 def invoice_effective_for_procurement(invoice: TaxInvoice) -> bool:
-    """采购链可用发票：有效状态且价税合计为正数。"""
+    """采购链可用发票：仅进项、issued 且价税合计为正数。"""
     amount = parse_decimal(invoice.total_amount)
-    return (invoice.status or "").lower() not in INVOICE_INVALID_STATUSES and amount is not None and amount > 0
+    return (
+        invoice.direction == "input"
+        and (invoice.status or "").lower() == "issued"
+        and amount is not None
+        and amount > 0
+    )
 
 
 def mark_invoice_linked(invoice: TaxInvoice, note: str = "采购链自动关联") -> None:
@@ -666,7 +671,7 @@ def auto_confirm_pending_links(db: Session, actor: str = "system") -> dict:
     ).all()
     invoice_links = db.query(TaxInvoiceLink).filter(
         TaxInvoiceLink.target_type.in_(
-            ("alibaba1688_order", "external_purchase_order")
+            ("alibaba1688_order", "external_purchase_order", "jackyun_purchase_order")
         ),
         TaxInvoiceLink.match_method.notin_(("rejected", "invalid_invoice")),
     ).all()
@@ -746,6 +751,23 @@ def auto_confirm_pending_links(db: Session, actor: str = "system") -> dict:
             invoice.match_note = "作废/红字或非正金额发票不参与采购匹配"
             skipped_orphans += 1
             continue
+        if link.target_type == "jackyun_purchase_order":
+            jpo = db.get(JackyunPurchaseOrder, link.target_id)
+            if jpo is None:
+                skipped_orphans += 1
+                continue
+            po_ids = sorted({
+                int(row.po_id)
+                for row in db.query(JackyunPurchaseOrderLink).filter_by(jackyun_po_id=jpo.id).all()
+            })
+            if len(po_ids) != 1:
+                link.confirmed = False
+                link.note = "吉客云采购单未唯一关联来源采购主单，待人工核对"
+                skipped_orphans += 1
+                continue
+            link.target_type = "external_purchase_order"
+            link.target_id = po_ids[0]
+
         if link.target_type == "alibaba1688_order":
             source = db.get(Alibaba1688Order, link.target_id)
             if source is None or source.row_status == "deleted":

@@ -16,7 +16,7 @@ from app.adapters.bank_file import sanitize_name
 from app.adapters.tax_invoice_file import ParsedTaxInvoiceExport, parse_tax_invoice_export
 from app.config import settings
 from app.core.audit import audit
-from app.models.purchase import ExternalPurchaseOrder, JackyunPurchaseOrder
+from app.models.purchase import ExternalPurchaseOrder, JackyunPurchaseOrder, JackyunPurchaseOrderLink
 from app.models.sales import SalesOrder
 from app.models.tax import TaxInvoice, TaxInvoiceImport, TaxInvoiceImportRecord, TaxInvoiceLink
 from app.services.import_lifecycle import (
@@ -188,26 +188,44 @@ def _normalize_row(
     }, ""
 
 
-def _auto_link(db: Session, invoice: TaxInvoice, related_ref: str, direction: str) -> bool:
+def _auto_link(
+    db: Session, invoice: TaxInvoice, related_ref: str, direction: str, *, confirmed: bool = True
+) -> bool:
     """只按清单明确给出的订单号自动关联，不按金额/名称猜测。"""
     ref = related_ref.strip()
     amount = invoice.total_amount
-    if (invoice.status or "").lower() in {"void", "red"} or amount is None or amount <= 0:
+    if (invoice.status or "").lower() != "issued" or amount is None or amount <= 0:
         return False
     if not ref:
         return False
+    if direction not in ("input", "output"):
+        invoice.match_status = "needs_review"
+        invoice.match_note = "发票进销项方向未确认，待人工核对后再进入业务链路"
+        return False
     candidates: list[tuple[str, int]] = []
-    if direction in ("input", "unknown"):
+    if direction == "input":
         external = db.query(ExternalPurchaseOrder).filter_by(external_order_id=ref).first()
         if external:
             candidates.append(("external_purchase_order", external.id))
         jpo = db.query(JackyunPurchaseOrder).filter_by(purch_no=ref).first()
         if jpo:
-            candidates.append(("jackyun_purchase_order", jpo.id))
-    if direction in ("output", "unknown"):
+            po_ids = sorted({
+                int(link.po_id)
+                for link in db.query(JackyunPurchaseOrderLink).filter_by(jackyun_po_id=jpo.id).all()
+            })
+            if len(po_ids) == 1:
+                candidates.append(("external_purchase_order", po_ids[0]))
+            elif len(po_ids) > 1:
+                invoice.match_status = "needs_review"
+                invoice.match_note = "吉客云采购单关联多个来源采购单，需人工分摊发票金额"
+            else:
+                invoice.match_status = "needs_review"
+                invoice.match_note = "吉客云采购单尚未关联来源采购主单，暂不计入采购开票进度"
+    if direction == "output":
         sales = db.query(SalesOrder).filter_by(order_no=ref).first()
         if sales:
             candidates.append(("sales_order", sales.id))
+    candidates = list(dict.fromkeys(candidates))
     if len(candidates) != 1:
         if candidates:
             invoice.match_status = "needs_review"
@@ -223,7 +241,7 @@ def _auto_link(db: Session, invoice: TaxInvoice, related_ref: str, direction: st
         exists.allocated_amount = invoice.total_amount
         exists.match_method = "source_ref"
         exists.confidence = Decimal("1.0000")
-        exists.confirmed = True
+        exists.confirmed = confirmed
     else:
         db.add(TaxInvoiceLink(
             invoice_id=invoice.id,
@@ -232,11 +250,15 @@ def _auto_link(db: Session, invoice: TaxInvoice, related_ref: str, direction: st
             allocated_amount=invoice.total_amount,
             match_method="source_ref",
             confidence=Decimal("1.0000"),
-            confirmed=True,
+            confirmed=confirmed,
             note="税务官方清单明确提供关联单号",
         ))
-    invoice.match_status = "matched"
-    invoice.match_note = f"按清单关联单号自动匹配：{target_type}"
+    if confirmed:
+        invoice.match_status = "matched"
+        invoice.match_note = f"按清单关联单号自动匹配：{target_type}"
+    else:
+        invoice.match_status = "unmatched"
+        invoice.match_note = "草稿发票已识别，确认生效后再进入业务链路"
     return True
 
 
@@ -360,7 +382,7 @@ def _ingest_rows(
         invoice.source_system = "tax_export"
         invoice.raw = raw
         invalid_for_business = (
-            normalized["status"] in {"void", "red"}
+            normalized["status"] != "issued"
             or (normalized["total_amount"] is not None and normalized["total_amount"] <= 0)
         )
         if invalid_for_business:
@@ -368,20 +390,21 @@ def _ingest_rows(
                 link.confirmed = False
                 link.match_method = "invalid_invoice"
                 link.confidence = None
-                link.note = "发票已作废/红冲，不参与业务匹配"
+                link.note = "发票状态非有效或金额非正，不参与业务匹配"
             invoice.match_status = "unmatched"
-            invoice.match_note = "发票已作废/红冲，不参与业务匹配"
+            invoice.match_note = "发票状态非有效或金额非正，不参与业务匹配"
             invoice.verified = False
             invoice.verified_month = ""
             invoice.verified_at = None
         else:
             invoice.match_status = invoice.match_status or "unmatched"
-            linked = _auto_link(db, invoice, normalized["related_order_ref"], normalized["direction"])
+            linked = _auto_link(
+                db, invoice, normalized["related_order_ref"], normalized["direction"],
+                confirmed=batch.lifecycle == "active",
+            )
             if linked and batch.lifecycle == "active":
                 matched += 1
             elif linked:
-                for link in db.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).all():
-                    link.confirmed = False
                 invoice.match_status = "unmatched"
                 invoice.match_note = "草稿发票已识别，确认生效后再进入业务链路"
         record.invoice_id = invoice.id
