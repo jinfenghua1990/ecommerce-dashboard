@@ -12,6 +12,7 @@ from app.core.audit import audit
 from app.db import get_db
 from app.services import consumable_service as svc
 from app.services import consumable_purchase_service as purchase_svc
+from app.services import warehouse_purchase_view as purchase_view
 from app.models.consumable_purchase import ConsumablePurchase
 from app.utils.uploads import read_upload_limited
 
@@ -181,7 +182,7 @@ def purchase_detail(purchase_id: int, db: Session = Depends(get_db)) -> dict:
     row = db.get(ConsumablePurchase, purchase_id)
     if not row:
         raise HTTPException(404, "耗材采购单不存在")
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.post("/purchases")
@@ -192,7 +193,7 @@ def create_purchase(body: PurchaseBody, request: Request, db: Session = Depends(
         db.rollback()
         raise HTTPException(400, str(exc))
     audit(db, current_actor(request), "consumable.purchase.create", "consumable_purchases", row.id, {"number": row.number})
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.post("/purchases/{purchase_id}/receipts")
@@ -203,7 +204,7 @@ def receive_purchase(purchase_id: int, body: ReceiptBody, request: Request, db: 
         db.rollback()
         raise HTTPException(400, str(exc))
     audit(db, current_actor(request), "consumable.purchase.receive", "consumable_purchases", row.id, {"requestKey": str(body.request_key)})
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.post("/purchases/{purchase_id}/cancel")
@@ -214,7 +215,7 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         db.rollback()
         raise HTTPException(400, str(exc))
     audit(db, current_actor(request), "consumable.purchase.cancel", "consumable_purchases", row.id)
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.post("/purchases/{purchase_id}/reopen")
@@ -226,7 +227,7 @@ def reopen_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         db.rollback()
         raise HTTPException(400, str(exc))
     audit(db, current_actor(request), "consumable.purchase.reopen", "consumable_purchases", row.id, {})
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.patch("/purchases/{purchase_id}")
@@ -240,7 +241,7 @@ def update_purchase(purchase_id: int, body: PurchaseUpdateBody, request: Request
         raise HTTPException(400, str(exc))
     audit(db, current_actor(request), "consumable.purchase.update", "consumable_purchases", row.id,
           {"fields": sorted(kwargs.keys())})
-    return purchase_svc.serialize_purchase(db, row, detail=True)
+    return purchase_view.serialize_purchase(db, row, detail=True)
 
 
 @router.delete("/purchases/{purchase_id}")
