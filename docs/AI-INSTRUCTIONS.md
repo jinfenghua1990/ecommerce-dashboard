@@ -24,16 +24,20 @@
 2. **必须基于现有代码继续开发**：优先复用已有组件、数据库和接口，不重复造轮子。
 3. 先分析并给出方案，再动手；不做大规模无关重构。
 
-## 三、现有系统速查（2026-09-07 核对）
+## 三、现有系统速查（2026-09-08 核对）
 
 - **架构**：`backend/`（FastAPI + SQLAlchemy + PostgreSQL，Alembic）+ `frontend/`（Next.js App Router，`output: "export"` 静态导出）。
 - **启动**：`cd backend && .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`（无 --reload，改后端必须 kill 重启）。
 - **前端生效**：改前端后必须 `cd frontend && npm run build`（产物 `frontend/out/` 由 FastAPI 同端口托管）+ 浏览器刷新。
-- **前端入口**：`frontend/src/app/**/page.tsx`；全局侧边栏：`frontend/src/components/sidebar.tsx`（NAV_ITEMS 数组）。
-- **采购工作台**：`/purchase/workbench`，页面内自带二级导航视图系统（`workbench-navigation.ts` + `?view=` 参数）。
-- **后端路由**：`backend/app/api/v1/`（25 个路由模块，统一 `/api/v1` 前缀，JWT 鉴权）。
-- **数据库**：PostgreSQL，81 张表（Alembic 迁移；⚠ 历史存在多 head 分叉，新增迁移前先 `alembic heads` 检查）。
-- **数据源**：1688 订单（浏览器直采/导入）、吉客云（MCP 同步 + 文件导入）、银行流水、税务发票、销售清单导入。
+- **前端入口**：`frontend/src/app/**/page.tsx`；全局侧边栏：`frontend/src/components/sidebar.tsx`。
+- **统一外壳**：`frontend/src/components/auth-shell.tsx` 提供唯一全局侧栏与动态主内容区；正式业务页不得再单独创建第二套全局侧栏。
+- **动态布局**：主内容区必须使用侧栏之外的浏览器剩余宽度，业务页顶层不得用固定 `max-width` 限制大屏；宽表格应在自己的 `overflow-x-auto` 容器内滚动，不让整个页面横向溢出。
+- **采购工作台**：`/purchase/workbench` 只负责采购业务视图；历史 `WorkbenchSidebar` 不得再次作为第二套全局导航展示。
+- **路由规则**：`/`、`/sales`、`/products`、`/finance`、`/settings`、库存等正式页面必须保持独立路由，不能重定向成 `/purchase/workbench?view=...`。只有废弃旧采购地址允许兼容跳转。
+- **导航验收**：改侧栏或路由后必须运行 `cd frontend && npm run check:routes`，确保所有侧栏入口有真实页面、正式业务路由没有被采购工作台劫持。
+- **后端路由**：`backend/app/api/v1/`（统一 `/api/v1` 前缀，JWT 鉴权）。
+- **数据库**：PostgreSQL + Alembic；新增迁移前先 `alembic heads` 检查，禁止再次制造多 head。
+- **数据源**：1688 订单（浏览器直采/导入）、吉客云（MCP/Web/文件导入）、银行流水、税务发票、销售清单导入。
 
 ## 四、硬性禁令
 
@@ -42,4 +46,5 @@
 - 新增数据库字段必须提供 migration。
 - 新增接口保持 `/api/v1` REST 风格统一。
 - Git：禁止 `git add -A` / `git add .`，逐个文件 add；先备份后删除。
+- 不允许为某个业务模块重新创建独立“总工作台壳”；业务功能应直接进入对应正式页面。
 - **每次 `git pull`（或 fetch+merge）前必须先备份**：① 未提交改动先 commit 或 stash（绝不丢弃）；② 在当前 HEAD 建备份分支 `git branch backup/pre-pull-<YYYYMMDD-HHMM>`；③ 再 pull。合并出问题可 `git reset --hard backup/pre-pull-...` 整体回滚。
