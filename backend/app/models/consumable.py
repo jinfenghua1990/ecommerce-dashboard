@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, DateTime, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,8 +15,8 @@ QUANTITY = Numeric(18, 4)
 class Consumable(Base, PkMixin, TimestampMixin):
     """外包装等耗材主档；code 是用户自定义耗材编码（不自动生成）。
 
-    库存三口径：stock_qty=自有仓、factory_qty=工厂、transit_qty=在途（发往工厂未收货）。
-    条形码可与正品相同，系统内以独立 ID 区分，不作唯一键。
+    库存三口径目前继续兼容：stock_qty=非工厂仓汇总、factory_qty=工厂仓汇总、transit_qty=在途。
+    新业务流水同时记录 warehouse_id，后续可平滑升级为完全按仓库核算。
     """
 
     __tablename__ = "consumables"
@@ -33,7 +33,6 @@ class Consumable(Base, PkMixin, TimestampMixin):
     factory_qty: Mapped[Decimal] = mapped_column(QUANTITY, default=Decimal("0"))
     transit_qty: Mapped[Decimal] = mapped_column(QUANTITY, default=Decimal("0"))
     min_stock_qty: Mapped[Decimal] = mapped_column(QUANTITY, default=Decimal("0"))
-    # 税收分类编码（开票用，19 位；也兼容旧 10 位简称）
     tax_code: Mapped[str] = mapped_column(String(32), default="", server_default="", nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     raw: Mapped[dict] = mapped_column(JSONB, default=dict)
@@ -54,9 +53,7 @@ class ConsumableSkuMapping(Base, PkMixin, TimestampMixin):
 class ConsumableTransaction(Base, PkMixin, TimestampMixin):
     """耗材库存流水；所有库存变化必须留痕。
 
-    transaction_type：purchase=采购入库 / send_factory=发往工厂 / factory_receive=工厂收货 /
-    consume=消耗 / stocktake=盘点（含旧 adjustment） / loss=报损 / manual=手工调整。
-    location：own=自有仓 / factory=工厂。操作前后库存快照见 *_before/*_after。
+    location 保留 old/factory 兼容口径；warehouse_id 是新的可配置仓库事实引用。
     """
 
     __tablename__ = "consumable_transactions"
@@ -69,8 +66,8 @@ class ConsumableTransaction(Base, PkMixin, TimestampMixin):
     transaction_type: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
     request_key: Mapped[str | None] = mapped_column(String(36), nullable=True)
     quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
-    # 单价 10 位小数：收货快照来自采购明细 unit_cost numeric(18,10)，4 位列会截断（2026-09-07）
     unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 10), nullable=True)
+    warehouse_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("warehouses.id"), nullable=True, index=True)
     location: Mapped[str | None] = mapped_column(String(16), nullable=True)
     source_type: Mapped[str] = mapped_column(String(32), default="manual")
     source_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -84,11 +81,7 @@ class ConsumableTransaction(Base, PkMixin, TimestampMixin):
 
 
 class InboundConsumableUsage(Base, PkMixin, TimestampMixin):
-    """一张吉客云入库单关联的耗材出库明细。
-
-    该表保存人工确认的业务事实，库存变化同时写入
-    ``consumable_transactions``，两者通过 ``link_id`` 幂等关联。
-    """
+    """一张吉客云入库单关联的耗材出库明细。"""
 
     __tablename__ = "inbound_consumable_usages"
     __table_args__ = (UniqueConstraint("link_id", "consumable_id", name="uq_inbound_consumable_usage"),)
