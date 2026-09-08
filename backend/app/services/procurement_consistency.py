@@ -32,7 +32,6 @@ from app.models.purchase import (
     JackyunPurchaseOrder,
     JackyunPurchaseOrderLink,
     PurchaseAllocationItem,
-    PurchaseExtraExpense,
     PurchaseInvoice,
     PurchaseInvoiceLink,
 )
