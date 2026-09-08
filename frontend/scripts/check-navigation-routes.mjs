@@ -30,14 +30,14 @@ if (missing.length) {
   process.exit(1);
 }
 
-const legacyStart = navigation.indexOf("const LEGACY_VIEWS");
+const legacyStart = navigation.indexOf("const LEGACY_PURCHASE_VIEWS");
 const legacyEnd = navigation.indexOf("};", legacyStart);
 const legacyBlock = legacyStart >= 0 && legacyEnd > legacyStart
   ? navigation.slice(legacyStart, legacyEnd + 2)
   : "";
 
 if (!legacyBlock) {
-  console.error("无法定位 workbench-navigation.ts 的 LEGACY_VIEWS，无法验证路由劫持规则。");
+  console.error("无法定位 workbench-navigation.ts 的 LEGACY_PURCHASE_VIEWS，无法验证路由劫持规则。");
   process.exit(1);
 }
 
