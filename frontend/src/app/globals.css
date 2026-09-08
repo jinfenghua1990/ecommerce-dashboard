@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: light;
+}
+
+html {
+  background: #f4f7fb;
+}
+
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  margin: 0;
+  background: #f4f7fb;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: #dbeafe;
+  color: #17335f;
 }
