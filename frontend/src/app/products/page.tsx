@@ -38,7 +38,6 @@ const emptyConsumable: ConsumableDraft = {
   purchase_unit_cost: "", min_stock_qty: "", tax_code: "", sku_ids: [],
 };
 
-/** 名称前的小徽标：品=正品（吉客云管库存）/ 耗=耗材（本系统管库存）。 */
 function KindBadge({ kind }: { kind: "goods" | "consumable" }) {
   return kind === "consumable"
     ? <span className="mr-1.5 inline-block shrink-0 rounded bg-amber-100 px-1 py-px align-[1px] text-[10px] font-semibold leading-4 text-amber-700">耗</span>
@@ -59,7 +58,6 @@ function StockCell({ row }: { row: UnifiedCatalogRow }) {
   );
 }
 
-/** 统一档案表（货品档案 / 组合套装两个页签共用）。selectionKey 形如 kind-id。 */
 function CatalogTable({ rows, onEditConsumable, onEditProduct, onToggleCostMode, selected, onToggleRow, onToggleAll }: {
   rows: UnifiedCatalogRow[];
   onEditConsumable: (row: UnifiedCatalogRow) => void;
@@ -157,18 +155,12 @@ export default function ProductsPage() {
   const [bundleSearch, setBundleSearch] = useState("");
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
-
-  // 正品（吉客云 SKU）编辑表单
   const [editing, setEditing] = useState<number | null>(null);
   const [productForm, setProductForm] = useState(emptyProduct);
-
-  // 耗材编辑弹窗
   const [consumableEditor, setConsumableEditor] = useState<"new" | number | null>(null);
   const [consumableDraft, setConsumableDraft] = useState<ConsumableDraft>(emptyConsumable);
   const [savingConsumable, setSavingConsumable] = useState(false);
   const [skuSearch, setSkuSearch] = useState("");
-
-  // 批量设置税务代码：选中行 key=kind-id
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkTaxCode, setBulkTaxCode] = useState("");
   const [bulkOverwrite, setBulkOverwrite] = useState(false);
@@ -202,7 +194,6 @@ export default function ProductsPage() {
     low: catalog.filter((r) => r.lowStock).length,
   }), [catalog]);
 
-  // 组合套装独立归纳；货品档案 tab 只显示 单品/普通套装 + 耗材，按 kind 本地过滤。
   const bundleRows = useMemo(() => {
     const term = bundleSearch.trim().toLowerCase();
     return catalog.filter((r) => r.kind === "goods" && r.category === "virtual_bundle")
@@ -250,10 +241,9 @@ export default function ProductsPage() {
     setEditing(row.id);
     setProductForm({ jackyun_sku_id: "", sku_code: row.code, product_type: row.category in TYPE_LABEL ? row.category : "single", sku_name: row.name, barcode: row.barcode, unit: row.unit, sale_price: row.salePrice || "", default_cost: row.defaultCost || "", cost_mode: row.costMode || "fixed", cost_tolerance_pct: row.costTolerancePct || "0.0200", tax_code: row.taxCode || "", goods_category: row.goodsCategory || "", status: row.status });
   };
-  const startNewProduct = () => { setEditing(0); setProductForm(emptyProduct); };
+  const startNewProduct = () => { setEditing(0); setProductForm(emptyProduct); setTab("catalog"); };
   const importWorkbook = async (event: React.ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; try { const result = await consumablesApi.importXlsx(file); setMsg(`已导入：新增 ${result.created}、更新 ${result.updated}、映射 ${result.mappings}`); load(); } catch (e) { setErr(String(e)); } event.target.value = ""; };
 
-  // ---- 耗材编辑 ----
   const openConsumableEditor = (row?: UnifiedCatalogRow) => {
     if (row) {
       setConsumableDraft({
@@ -267,6 +257,7 @@ export default function ProductsPage() {
       setConsumableDraft(emptyConsumable);
       setConsumableEditor("new");
     }
+    setTab("catalog");
     setSkuSearch("");
   };
   const openConsumableEditorById = (id: number) => {
@@ -319,26 +310,25 @@ export default function ProductsPage() {
 
   const bulkBar = selected.size > 0 && <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
     <span className="font-medium text-blue-700">已选 {selected.size} 项</span>
-    <input
-      placeholder="税务代码（19 位税收分类编码）"
-      value={bulkTaxCode}
-      onChange={(e) => setBulkTaxCode(e.target.value.replace(/\D/g, ""))}
-      maxLength={21}
-      className="w-56 rounded border bg-white px-2 py-1.5 font-mono"
-    />
-    <label className="flex items-center gap-1 text-gray-600">
-      <input type="checkbox" checked={bulkOverwrite} onChange={(e) => setBulkOverwrite(e.target.checked)} className="h-3.5 w-3.5 accent-blue-600" />
-      覆盖已有值（默认仅填空缺）
-    </label>
-    <button onClick={applyBulkTaxCode} disabled={bulkSaving || !bulkTaxCode.trim()} className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-      {bulkSaving ? "保存中…" : "批量设置税务代码"}
-    </button>
+    <input placeholder="税务代码（19 位税收分类编码）" value={bulkTaxCode} onChange={(e) => setBulkTaxCode(e.target.value.replace(/\D/g, ""))} maxLength={21} className="w-56 rounded border bg-white px-2 py-1.5 font-mono" />
+    <label className="flex items-center gap-1 text-gray-600"><input type="checkbox" checked={bulkOverwrite} onChange={(e) => setBulkOverwrite(e.target.checked)} className="h-3.5 w-3.5 accent-blue-600" />覆盖已有值（默认仅填空缺）</label>
+    <button onClick={applyBulkTaxCode} disabled={bulkSaving || !bulkTaxCode.trim()} className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50">{bulkSaving ? "保存中…" : "批量设置税务代码"}</button>
     <button onClick={() => setSelected(new Set())} className="rounded border bg-white px-3 py-1.5 text-gray-600 hover:bg-gray-50">取消选择</button>
   </div>;
 
   return <div>
-    <h1 className="text-xl font-semibold">商品档案</h1>
-    <p className="mt-1 text-sm text-gray-400">统一货品档案：正品（含组合套装）库存归吉客云管理，耗材库存由本系统维护；库存明细见左侧「库存-正品 / 库存-耗材」二级页。</p>
+    <div className="sticky top-0 z-20 -mx-8 -mt-6 flex flex-wrap items-end justify-between gap-3 border-b border-gray-200 bg-white/95 px-8 py-5 backdrop-blur">
+      <div>
+        <h1 className="text-xl font-semibold">货品档案</h1>
+        <p className="mt-1 text-sm text-gray-400">正品、耗材、组合套装的新增、编辑、关联和导入都在本页完成；业务配置不再放到系统设置。</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={startNewProduct} className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">+ 新建正品</button>
+        <button onClick={() => openConsumableEditor()} className="rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600">+ 新建耗材</button>
+        <label className="cursor-pointer rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">导入耗材档案<input type="file" accept=".xlsx,.xls" className="hidden" onChange={importWorkbook} /></label>
+      </div>
+    </div>
+
     {err && <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{err}<button className="ml-3" onClick={() => setErr("")}>关闭</button></div>}
     {msg && <div className="mt-4 rounded-lg bg-green-50 p-3 text-sm text-green-700">{msg}</div>}
     <div className="mt-5 grid grid-cols-4 gap-4">
@@ -359,19 +349,10 @@ export default function ProductsPage() {
 
     {tab === "catalog" && <section className="mt-4 rounded-xl border border-gray-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium text-gray-700">统一货品档案</h2>
-          <p className="mt-1 text-xs text-gray-400">正品（品）继续走吉客云流程；耗材（耗）在本系统维护采购、收货与三仓库存。</p>
-        </div>
+        <div><h2 className="text-sm font-medium text-gray-700">统一货品档案</h2><p className="mt-1 text-xs text-gray-400">正品（品）继续走吉客云流程；耗材（耗）在本系统维护采购、收货与库存。</p></div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-gray-200 p-0.5 text-xs">
-            {([["all", `全部 ${catalogRows.length}`], ["goods", `正品 ${counts.goods - counts.bundles}`], ["consumable", `耗材 ${counts.consumable}`]] as const).map(([key, label]) => (
-              <button key={key} onClick={() => setKind(key)} className={`rounded-md px-2.5 py-1.5 ${kind === key ? "bg-blue-50 font-medium text-blue-600" : "text-gray-500 hover:bg-gray-50"}`}>{label}</button>
-            ))}
-          </div>
+          <div className="flex rounded-lg border border-gray-200 p-0.5 text-xs">{([["all", `全部 ${catalogRows.length}`], ["goods", `正品 ${counts.goods - counts.bundles}`], ["consumable", `耗材 ${counts.consumable}`]] as const).map(([key, label]) => (<button key={key} onClick={() => setKind(key)} className={`rounded-md px-2.5 py-1.5 ${kind === key ? "bg-blue-50 font-medium text-blue-600" : "text-gray-500 hover:bg-gray-50"}`}>{label}</button>))}</div>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索编码、条码或名称" className="w-56 rounded-lg border px-3 py-1.5 text-sm" />
-          <button onClick={() => openConsumableEditor()} className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm text-white hover:bg-amber-600">+ 新建耗材</button>
-          <button onClick={startNewProduct} className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm text-white">+ 新建正品</button>
         </div>
       </div>
 
@@ -393,41 +374,23 @@ export default function ProductsPage() {
       </form>}
 
       {bulkBar}
-
       <CatalogTable rows={catalogRows} onEditConsumable={openConsumableEditor} onEditProduct={startEditProduct} onToggleCostMode={saveCostMode} selected={selected} onToggleRow={toggleRow} onToggleAll={() => toggleAll(catalogRows)} />
     </section>}
 
     {tab === "bundles" && <section className="mt-4 rounded-xl border border-gray-200 bg-white p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium text-gray-700">组合套装（虚拟）</h2>
-          <p className="mt-1 text-xs text-gray-400">ES 开头的虚拟组合套装：不同商品、不同数量的组合（如 A+B+C）；库存仍归吉客云管理，此处仅做档案归纳，不出现在采购单 SKU 候选中。</p>
-        </div>
-        <input value={bundleSearch} onChange={(e) => setBundleSearch(e.target.value)} placeholder="搜索编码、条码或名称" className="w-56 rounded-lg border px-3 py-1.5 text-sm" />
-      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-medium text-gray-700">组合套装（虚拟）</h2><p className="mt-1 text-xs text-gray-400">ES 开头的虚拟组合套装：不同商品、不同数量的组合（如 A+B+C）；库存仍归吉客云管理，此处仅做档案归纳，不出现在采购单 SKU 候选中。</p></div><input value={bundleSearch} onChange={(e) => setBundleSearch(e.target.value)} placeholder="搜索编码、条码或名称" className="w-56 rounded-lg border px-3 py-1.5 text-sm" /></div>
       <CatalogTable rows={bundleRows} onEditConsumable={openConsumableEditor} onEditProduct={startEditProduct} onToggleCostMode={saveCostMode} selected={selected} onToggleRow={toggleRow} onToggleAll={() => toggleAll(bundleRows)} />
     </section>}
 
     {tab === "consumables" && <><ConsumableWorkbench rows={consumables} products={products} reload={load} notify={setMsg} fail={setErr} onImport={importWorkbook} onEdit={openConsumableEditorById} onCreate={() => openConsumableEditor()} />
     <section className="mt-4 rounded-xl border border-gray-200 bg-white p-4"><h2 className="text-sm font-medium text-gray-700">耗材使用进度</h2><p className="mt-1 text-xs text-gray-400">使用率 = 已使用量 ÷ 采购量。</p><table className="mt-4 w-full text-sm"><thead className="text-left text-xs text-gray-500"><tr><th className="py-2">代码</th><th className="py-2">名称</th><th className="py-2 text-right">采购量</th><th className="py-2 text-right">已使用</th><th className="py-2 text-right">剩余</th><th className="py-2">进度</th></tr></thead><tbody className="divide-y divide-gray-100">{consumables.map((row) => { const rate = Math.min(Math.max(Number(row.usageRate || 0), 0), 1); return <tr key={row.id}><td className="py-2 font-mono text-xs">{row.code}</td><td className="py-2">{row.name}</td><td className="py-2 text-right">{qty(row.purchasedQty)} {row.unit}</td><td className="py-2 text-right">{qty(row.usedQty)} {row.unit}</td><td className="py-2 text-right">{qty(row.stockQty)} {row.unit}</td><td className="w-64 py-2"><div className="flex items-center gap-2"><div className="h-2 flex-1 rounded bg-gray-100"><div className="h-2 rounded bg-blue-600" style={{ width: `${rate * 100}%` }} /></div><span className="w-12 text-right text-xs text-gray-500">{(rate * 100).toFixed(1)}%</span></div></td></tr>; })}</tbody></table></section>
-    <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700"><span>耗材（包材）采购的 1688 订单已与正常货品单同列在采购工作台「订单视图」跟进：列表带「耗材」标签、货品单带「正品」标签，便于识别。</span><a href="/purchase/workbench?view=orders" className="ml-2 font-medium underline">前往订单视图</a></div></>}
+    <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700"><span>耗材采购的 1688 订单与正常货品单同列在采购工作台跟进。</span><a href="/purchase/workbench?view=orders" className="ml-2 font-medium underline">前往订单视图</a></div></>}
 
     {consumableEditor !== null && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setConsumableEditor(null); }}>
       <form onSubmit={saveConsumable} className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-2xl bg-white p-5 shadow-2xl">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-800">{consumableEditor === "new" ? "新建耗材档案" : "编辑耗材档案"}</h3>
-            <p className="mt-1 text-xs text-slate-400">编码首次手填（建议 HC-CH- + 条形码）；库存不在此修改，请走采购收货或库存流水。</p>
-          </div>
-          <button type="button" onClick={() => setConsumableEditor(null)} className="text-xl leading-none text-slate-300 hover:text-slate-500">×</button>
-        </div>
+        <div className="flex items-start justify-between"><div><h3 className="text-base font-semibold text-slate-800">{consumableEditor === "new" ? "新建耗材档案" : "编辑耗材档案"}</h3><p className="mt-1 text-xs text-slate-400">编码首次手填（建议 HC-CH- + 条形码）；库存不在此修改，请走采购收货或库存流水。</p></div><button type="button" onClick={() => setConsumableEditor(null)} className="text-xl leading-none text-slate-300 hover:text-slate-500">×</button></div>
         <div className="mt-5 grid grid-cols-2 gap-3 text-xs">
-          <label className="col-span-2">耗材编码<span className="text-red-500">*</span>
-            <div className="mt-1.5 flex gap-2">
-              <input required value={consumableDraft.code} onChange={(e) => setConsumableDraft({ ...consumableDraft, code: e.target.value })} placeholder="如 HC-CH-2020240528003（多耗材加 -BX/-LB/-CT 后缀）" className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" />
-              <button type="button" disabled={!consumableDraft.barcode.trim()} onClick={() => setConsumableDraft((d) => ({ ...d, code: `HC-CH-${d.barcode.trim()}` }))} className="h-9 shrink-0 rounded-lg border border-slate-200 px-3 text-slate-600 hover:border-amber-300 hover:text-amber-600 disabled:opacity-40">HC-CH-+条码</button>
-            </div>
-          </label>
+          <label className="col-span-2">耗材编码<span className="text-red-500">*</span><div className="mt-1.5 flex gap-2"><input required value={consumableDraft.code} onChange={(e) => setConsumableDraft({ ...consumableDraft, code: e.target.value })} placeholder="如 HC-CH-2020240528003（多耗材加 -BX/-LB/-CT 后缀）" className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /><button type="button" disabled={!consumableDraft.barcode.trim()} onClick={() => setConsumableDraft((d) => ({ ...d, code: `HC-CH-${d.barcode.trim()}` }))} className="h-9 shrink-0 rounded-lg border border-slate-200 px-3 text-slate-600 hover:border-amber-300 hover:text-amber-600 disabled:opacity-40">HC-CH-+条码</button></div></label>
           <label className="col-span-2">耗材名称<span className="text-red-500">*</span><input required value={consumableDraft.name} onChange={(e) => setConsumableDraft({ ...consumableDraft, name: e.target.value })} className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /></label>
           <label>条形码<input value={consumableDraft.barcode} onChange={(e) => setConsumableDraft({ ...consumableDraft, barcode: e.target.value })} placeholder="可与正品条码相同" className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /></label>
           <label>单位<input required value={consumableDraft.unit} onChange={(e) => setConsumableDraft({ ...consumableDraft, unit: e.target.value })} className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /></label>
@@ -436,35 +399,13 @@ export default function ProductsPage() {
           <label>安全库存<input value={consumableDraft.min_stock_qty} onChange={(e) => setConsumableDraft({ ...consumableDraft, min_stock_qty: e.target.value })} placeholder="0 = 不预警" className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /></label>
           <label className="col-span-2">参考采购单价<input value={consumableDraft.purchase_unit_cost} onChange={(e) => setConsumableDraft({ ...consumableDraft, purchase_unit_cost: e.target.value })} placeholder="可空，收货时按实付更新" className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 px-3 outline-none focus:border-amber-400" /></label>
         </div>
-
         <div className="mt-4 rounded-xl border border-slate-200 p-3">
-          <div className="flex items-center justify-between">
-            <div><h4 className="text-xs font-semibold text-slate-700">关联正品</h4><p className="mt-0.5 text-[10px] text-slate-400">一个耗材可关联多个正品 SKU（多对多），保存后永久生效。</p></div>
-            <span className="text-[10px] text-slate-400">已选 {consumableDraft.sku_ids.length}</span>
-          </div>
-          {linkedRefs.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">
-            {linkedRefs.map((ref) => <span key={ref.skuId} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
-              <span className="font-mono">{ref.skuCode}</span> {ref.skuName}
-              <button type="button" onClick={() => toggleLinkedSku(ref.skuId)} className="text-amber-400 hover:text-red-500">×</button>
-            </span>)}
-          </div>}
+          <div className="flex items-center justify-between"><div><h4 className="text-xs font-semibold text-slate-700">关联正品</h4><p className="mt-0.5 text-[10px] text-slate-400">一个耗材可关联多个正品 SKU（多对多），保存后永久生效。</p></div><span className="text-[10px] text-slate-400">已选 {consumableDraft.sku_ids.length}</span></div>
+          {linkedRefs.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{linkedRefs.map((ref) => <span key={ref.skuId} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700"><span className="font-mono">{ref.skuCode}</span> {ref.skuName}<button type="button" onClick={() => toggleLinkedSku(ref.skuId)} className="text-amber-400 hover:text-red-500">×</button></span>)}</div>}
           <input value={skuSearch} onChange={(e) => setSkuSearch(e.target.value)} placeholder="搜索正品 SKU 编码或名称" className="mt-2 h-8 w-full rounded-lg border border-slate-200 px-3 text-xs outline-none focus:border-amber-400" />
-          <div className="mt-2 max-h-40 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-100">
-            {skuCandidates.map((p) => {
-              const checked = consumableDraft.sku_ids.includes(p.id);
-              return <button type="button" key={p.id} onClick={() => toggleLinkedSku(p.id)} className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[11px] ${checked ? "bg-amber-50" : "hover:bg-slate-50"}`}>
-                <span className="min-w-0 truncate text-slate-600"><span className="font-mono text-indigo-500">{p.skuCode}</span> · {p.skuName || p.goodsName}</span>
-                <span className={`ml-2 shrink-0 ${checked ? "text-amber-600" : "text-slate-300"}`}>{checked ? "已选 ✓" : "选择"}</span>
-              </button>;
-            })}
-            {!skuCandidates.length && <div className="px-3 py-3 text-[11px] text-slate-400">没有匹配的正品 SKU</div>}
-          </div>
+          <div className="mt-2 max-h-40 divide-y divide-slate-100 overflow-auto rounded-lg border border-slate-100">{skuCandidates.map((p) => { const checked = consumableDraft.sku_ids.includes(p.id); return <button type="button" key={p.id} onClick={() => toggleLinkedSku(p.id)} className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[11px] ${checked ? "bg-amber-50" : "hover:bg-slate-50"}`}><span className="min-w-0 truncate text-slate-600"><span className="font-mono text-indigo-500">{p.skuCode}</span> · {p.skuName || p.goodsName}</span><span className={`ml-2 shrink-0 ${checked ? "text-amber-600" : "text-slate-300"}`}>{checked ? "已选 ✓" : "选择"}</span></button>; })}{!skuCandidates.length && <div className="px-3 py-3 text-[11px] text-slate-400">没有匹配的正品 SKU</div>}</div>
         </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={() => setConsumableEditor(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs text-slate-600">取消</button>
-          <button type="submit" disabled={savingConsumable} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-medium text-white hover:bg-amber-600 disabled:opacity-50">{savingConsumable ? "保存中…" : "保存档案"}</button>
-        </div>
+        <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setConsumableEditor(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs text-slate-600">取消</button><button type="submit" disabled={savingConsumable} className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-medium text-white hover:bg-amber-600 disabled:opacity-50">{savingConsumable ? "保存中…" : "保存档案"}</button></div>
       </form>
     </div>}
   </div>;
