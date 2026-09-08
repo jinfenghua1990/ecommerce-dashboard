@@ -2,7 +2,34 @@
 
 > 核心原则：**端口是整个程序的入口，不是一个功能一个端口。** 本模块是 `/supply-chain` 路由下的页面群，不是新系统。
 
-## 一、目标路由
+## 状态：已落地（2026-09-08 合入 master）
+
+本文的目标**已由 GitHub 分支 `feature/supply-chain-center-v1` = `release/v1.6.0` 实现完毕**，
+2026-09-08 全量拉取后合入本地 master（提交 `af1309d` + `686c0bb`）。
+**不要再按本文从零开发，直接在现有代码上迭代。**
+
+实际落地的路由（与下文原计划有出入，以这里为准）：
+
+| 路由 | 落地情况 |
+|---|---|
+| `/supply-chain` | 供应链中心首页，补货面板 `replenishment-panel.tsx` 就挂在首页（原计划单独 `/replenishment` 未单独建） |
+| `/supply-chain/production` | 生产订单 + `production-panel.tsx` |
+| `/supply-chain/material-flow` | 耗材流转（原计划叫 `/materials`；耗材档案走 `/products/inventory-consumables`） |
+| `/supply-chain/in-transit` | 生产执行 / 在途 |
+| `/supply-chain/receiving` | 到货入库 |
+| `/supply-chain/warehouses` | 仓库（**新增**，可配置厂内/B2C 仓） |
+| `/supply-chain/purchase` | **未单独建**，复用 `/purchase/workbench` |
+| `/supply-chain/suppliers` | **未单独建**，复用 suppliers 表 |
+| `/finance/tax-accounting` | 税务做账（来自 `feature/tax-accounting-v1`） |
+| `/finance/tax-accounting/categories` | 分类规则自助维护 |
+
+配套后端：`app/api/v1/supply_chain.py`、`supply_chain_material_flow.py`、`supply_chain_finished_flow.py`、
+`services/production_service.py`、`production_material_flow_service.py`、`production_finished_flow_service.py`、
+`monthly_core.py`、`closing.py`；迁移含 production / configurable_warehouses / material_movements / finished_flow 等。
+
+> 下文保留为当时的现状分析（数据库 81 张表清单等仍有参考价值）。
+
+## 一、目标路由（原始计划）
 
 | 路由 | 页面 | 说明 |
 |---|---|---|
