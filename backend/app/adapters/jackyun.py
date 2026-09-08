@@ -497,10 +497,13 @@ class JackyunAdapter:
             row = db.query(Product).filter_by(jackyun_goods_id=gid).first()
             product_created = row is None
             if row:
-                row.raw = rec
+                # 品类被本地手工修改过（raw.categoryLocallyEdited）时，同步不再覆盖 category
+                category_locked = bool((row.raw or {}).get("categoryLocallyEdited"))
+                row.raw = {**rec, "categoryLocallyEdited": True} if category_locked else rec
                 row.goods_code = str(rec.get("goodsNo") or rec.get("goods_code") or rec.get("goodsCode") or row.goods_code)
                 row.goods_name = str(rec.get("goodsName") or rec.get("goods_name") or row.goods_name)
-                row.category = str(rec.get("cateName") or row.category)
+                if not category_locked:
+                    row.category = str(rec.get("cateName") or row.category)
             else:
                 row = Product(
                     jackyun_goods_id=gid,

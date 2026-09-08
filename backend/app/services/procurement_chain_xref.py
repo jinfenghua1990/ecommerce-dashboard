@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -181,7 +180,7 @@ def apply_xref_links(
             order_id=item["order_db_id"], external_po_id=None,
             target_type="inbound", target_id=item["rk_db_id"],
             match_method="manual", confidence=1.0, confirmed=True,
-            note=(f"来源：手动交叉对照表 1688_rk_xref.tsv"
+            note=("来源：手动交叉对照表 1688_rk_xref.tsv"
                   + (f" | 备注：{item['note_extra']}" if item["note_extra"] else "")
                   + (f" | 含 SKU {'+'.join(item['barcodes'])}" if item["barcodes"] else "")),
         )

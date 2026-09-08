@@ -1,7 +1,7 @@
 """共享 pytest fixtures。
 
 TestClient + FastAPI dependency override 模式：用真实 PG（schema 已迁移），
-通过 connection-bound session + transaction rollback 实现"无副作用测试"。
+通过 connection-bound session + transaction rollback 实现“无副作用测试”。
 
 不应在测试中写入会被外部接口观察到的脏数据：
 - rollback 关 connection，外部 PG 连接看不到；
@@ -47,7 +47,6 @@ def db_session() -> Generator:
 
 @pytest.fixture(scope="function")
 def client(db_session) -> Generator[TestClient, None, None]:
-    """FastAPI TestClient + 用 db_session 覆盖 get_db 依赖。"""
     def _override_get_db():
         try:
             yield db_session
@@ -56,12 +55,21 @@ def client(db_session) -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_db] = _override_get_db
 
-    # 全局鉴权生效：为测试客户端准备已登录管理员（flush 不 commit，随事务回滚）
-    role = db_session.scalar(select(Role).where(Role.code == "admin"))
-    if role is None:
-        role = Role(code="admin", name="管理员")
-        db_session.add(role)
-        db_session.flush()
+    # 与正式 seed.py 对齐：测试环境也必须具备全部内置角色，不能依赖某次外部 seed 恰好跑过。
+    builtin_roles = {
+        "admin": "管理员",
+        "operator": "操作员",
+        "viewer": "查看者",
+    }
+    roles: dict[str, Role] = {}
+    for code, name in builtin_roles.items():
+        role = db_session.scalar(select(Role).where(Role.code == code))
+        if role is None:
+            role = Role(code=code, name=name)
+            db_session.add(role)
+            db_session.flush()
+        roles[code] = role
+
     user = User(
         username="pytest-admin",
         display_name="测试管理员",
@@ -69,16 +77,17 @@ def client(db_session) -> Generator[TestClient, None, None]:
     )
     db_session.add(user)
     db_session.flush()
-    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    db_session.add(UserRole(user_id=user.id, role_id=roles["admin"].id))
     db_session.flush()
     token = create_token(uid=user.id, username=user.username)
 
-    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as c:
-        c._pytest_user = user  # 供个别测试引用
-        yield c
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as test_client:
+        test_client._pytest_user = user  # 供个别测试引用
+        yield test_client
     app.dependency_overrides.clear()
 
-    # 业务代码 commit 会绕过事务回滚，这里显式清理测试用户及其痕迹
+    # 业务代码 commit 会绕过事务回滚，这里显式清理测试用户及其痕迹。
+    # 内置角色本身与正式 seed 一致，允许保留。
     try:
         db_session.execute(delete(UserRole).where(UserRole.user_id == user.id))
         db_session.execute(delete(AuditLog).where(AuditLog.actor == user.username))

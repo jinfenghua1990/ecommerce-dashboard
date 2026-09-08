@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import require_auth, require_roles
 from app.core.audit import audit
-from app.core.auth import create_token, hash_password, verify_password
+from app.core.auth import create_token, hash_password, password_needs_rehash, verify_password
 
 _TOKEN_TTL_DEFAULT = 12 * 3600  # 12 小时
 _TOKEN_TTL_REMEMBER = 30 * 24 * 3600  # 记住登录：30 天
@@ -55,6 +55,12 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     if not user.is_active:
         audit(db, user.username, "LOGIN_FAILED", detail={"reason": "账号已停用"})
         raise HTTPException(status_code=403, detail="账号已停用")
+
+    # 旧 PBKDF2 工作因子在成功登录时平滑升级；不要求用户主动改密码。
+    # audit() 与当前 session 同事务提交，因此 hash 更新和登录审计一起持久化。
+    if password_needs_rehash(user.hashed_password):
+        user.hashed_password = hash_password(body.password)
+        db.add(user)
 
     ttl = _TOKEN_TTL_REMEMBER if body.remember_me else _TOKEN_TTL_DEFAULT
     token = create_token(

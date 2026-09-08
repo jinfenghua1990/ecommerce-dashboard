@@ -127,7 +127,7 @@ def sync_jackyun(self, job_type: str, force: bool = False) -> dict[str, Any]:
             _set_jackyun_connection(db, "blocked", message)
             ensure_exception(db, "JACKYUN_SYNC_FAIL", "吉客云同步失败", str(exc))
             return {"status": "blocked", "error": message}
-        except Exception as exc:
+        except Exception as exc:  # 指数退避重试
             message = str(exc)[:500]
             _finish_attempt(db, job.id, "failed", message)
             _set_jackyun_connection(db, "error", message)
@@ -165,7 +165,6 @@ def login_1688() -> dict[str, Any]:
     db = SessionLocal()
     try:
         from app.services.alibaba1688_browser_sync_service import run_login
-
         return run_login(db, actor="system")
     finally:
         db.close()
@@ -176,7 +175,6 @@ def sync_jky_web() -> dict[str, Any]:
     db = SessionLocal()
     try:
         from app.services.jky_web_sync_service import sync_all
-
         return sync_all(db, actor="system", include_sales=False)
     finally:
         db.close()
@@ -187,7 +185,6 @@ def sync_jky_orders() -> dict[str, Any]:
     db = SessionLocal()
     try:
         from app.services.jky_order_sync_service import sync_orders
-
         return sync_orders(db, actor="system")
     finally:
         db.close()
@@ -195,13 +192,14 @@ def sync_jky_orders() -> dict[str, Any]:
 
 @celery_app.task(name="tasks.monthly_verify", bind=True, max_retries=3, default_retry_delay=60)
 def monthly_verify(self) -> dict[str, Any]:
-    """月初对上月完整校验：财务资料完整性检查 + 缺失进异常中心。"""
-    from datetime import date
+    """月初对上月完整校验：销售汇总生成后再检查财务资料缺项。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     from app.services import finance_service
     from app.services.integration_service import ensure_exception
 
-    today = date.today()
+    today = datetime.now(ZoneInfo(settings.TZ)).date()
     y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     db = SessionLocal()
     try:
@@ -210,7 +208,7 @@ def monthly_verify(self) -> dict[str, Any]:
         if period.status != "SENT" and missing:
             ensure_exception(
                 db, "FINANCE_INCOMPLETE", f"财务资料缺失 {y}-{m:02d}",
-                f"缺少: {missing}（月度完整性检查，月初自动）",
+                f"缺少: {missing}（月度完整性检查）",
             )
             _record("system", "monthly_verify", "failed", f"{y}-{m:02d} 财务资料不完整: {missing}")
             return {"status": "incomplete", "period": f"{y}-{m:02d}", "missing": missing}
@@ -226,13 +224,14 @@ def monthly_verify(self) -> dict[str, Any]:
 
 @celery_app.task(name="tasks.generate_monthly_sales_outbound", bind=True, max_retries=2, default_retry_delay=120)
 def generate_monthly_sales_outbound(self, year: int | None = None, month: int | None = None) -> dict[str, Any]:
-    """保留的内部销售出库明细归档任务；不再进入默认财务发送计划。"""
-    from datetime import date
+    """保留吉客云销售出库原始口径 CSV，作为财务底稿之一。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     from app.services import finance_service, sales_outbound_report_service as svc
 
     if year is None or month is None:
-        today = date.today()
+        today = datetime.now(ZoneInfo(settings.TZ)).date()
         y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
         year, month = y, m
     db = SessionLocal()
@@ -249,12 +248,131 @@ def generate_monthly_sales_outbound(self, year: int | None = None, month: int | 
             actor="system",
         )
         _record("system", "sales_outbound_monthly", "success",
-                f"{year}-{month:02d} 销售出库内部明细已归档（{rep['summary']['docCount']} 单）")
+                f"{year}-{month:02d} 销售出库报表已归档（{rep['summary']['docCount']} 单）")
         return {"status": "ok", "period": f"{year}-{month:02d}",
                 "archiveFileId": row.id, "docCount": rep["summary"]["docCount"]}
     except Exception as exc:
         _record("system", "sales_outbound_monthly", "failed", str(exc)[:500])
         raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+    finally:
+        db.close()
+
+
+@celery_app.task(name="tasks.generate_monthly_finance_sales_report", bind=True, max_retries=2, default_retry_delay=120)
+def generate_monthly_finance_sales_report(
+    self, year: int | None = None, month: int | None = None
+) -> dict[str, Any]:
+    """按用户保存的字段模板生成上月销售汇总 XLSX，并版本化归档。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.services import finance_sales_report_service as report_service
+    from app.services import finance_service
+
+    if year is None or month is None:
+        today = datetime.now(ZoneInfo(settings.TZ)).date()
+        year, month = (
+            (today.year, today.month - 1)
+            if today.month > 1
+            else (today.year - 1, 12)
+        )
+    db = SessionLocal()
+    try:
+        result = report_service.generate_and_archive(
+            db,
+            company=finance_service.DEFAULT_COMPANY,
+            year=year,
+            month=month,
+            actor="system",
+            skip_if_exists=True,
+        )
+        _record(
+            "system", "finance_sales_report_monthly", "success",
+            f"{year}-{month:02d} 销售汇总：{result['status']}", result,
+        )
+        return result
+    except Exception as exc:
+        _record("system", "finance_sales_report_monthly", "failed", str(exc)[:500])
+        raise self.retry(exc=exc, countdown=120 * (2 ** self.request.retries))
+    finally:
+        db.close()
+
+
+@celery_app.task(name="tasks.finance_auto_delivery")
+def finance_auto_delivery() -> dict[str, Any]:
+    """按模板自动发送财务包。
+
+    每小时检查一次，但只在模板设定小时执行；从 send_day 起每天重试，直到资料齐全并发送成功。
+    已发送账期直接跳过，避免重复发送。
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from app.models.finance import FinanceDeliveryPackage, FinanceSalesReportTemplate
+    from app.services import finance_sales_report_service as report_service
+    from app.services import finance_service
+
+    now = datetime.now(ZoneInfo(settings.TZ))
+    db = SessionLocal()
+    results: list[dict[str, Any]] = []
+    try:
+        templates = (
+            db.query(FinanceSalesReportTemplate)
+            .filter_by(enabled=True, auto_send=True)
+            .all()
+        )
+        for template in templates:
+            if now.day < template.send_day or now.hour != template.send_hour:
+                continue
+            if now.month > 1:
+                year, month = now.year, now.month - 1
+            else:
+                year, month = now.year - 1, 12
+
+            report_service.generate_and_archive(
+                db,
+                company=template.company,
+                year=year,
+                month=month,
+                actor="system",
+                skip_if_exists=True,
+            )
+            period = finance_service.refresh_period_status(db, template.company, year, month)
+            if period.status == "SENT":
+                results.append({"company": template.company, "status": "already_sent"})
+                continue
+            missing = (period.missing_summary or {}).get("missing", {})
+            if missing:
+                results.append({"company": template.company, "status": "waiting_files", "missing": missing})
+                continue
+            if not template.to_addrs:
+                results.append({"company": template.company, "status": "missing_recipient"})
+                continue
+
+            latest_pkg = (
+                db.query(FinanceDeliveryPackage)
+                .filter_by(period_id=period.id)
+                .order_by(FinanceDeliveryPackage.version.desc())
+                .first()
+            )
+            if latest_pkg is None or latest_pkg.status not in {"PACKAGED", "SENT"}:
+                finance_service.package_period(db, template.company, year, month, actor="system")
+            try:
+                sent = finance_service.send_delivery(
+                    db,
+                    template.company,
+                    year,
+                    month,
+                    to_addrs=list(template.to_addrs or []),
+                    cc_addrs=list(template.cc_addrs or []),
+                    actor="system",
+                )
+                results.append({"company": template.company, "status": "sent", **sent})
+            except AdapterNotConfigured as exc:
+                results.append({"company": template.company, "status": "smtp_unconfigured", "detail": str(exc)})
+            except (ValueError, RuntimeError) as exc:
+                results.append({"company": template.company, "status": "send_failed", "detail": str(exc)[:500]})
+        return {"status": "ok", "checkedAt": now.isoformat(), "results": results}
     finally:
         db.close()
 

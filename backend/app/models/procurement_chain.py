@@ -1,12 +1,15 @@
 """采购全链路模型：1688 订单 ↔ 吉客云入库单 / 付款结算单 的关联。"""
 
-from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, PkMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.alibaba1688_import import Alibaba1688Order
 
 
 class ProcurementChainLink(Base, PkMixin, TimestampMixin):
@@ -36,7 +39,6 @@ class ProcurementChainLink(Base, PkMixin, TimestampMixin):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)  # 0~1
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     note: Mapped[str] = mapped_column(Text, default="")
-    # 入库关联必须明确本次是否产生耗材出库；None/False 均不代表已完成确认。
     consumable_usage_decided: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     consumable_usage_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 

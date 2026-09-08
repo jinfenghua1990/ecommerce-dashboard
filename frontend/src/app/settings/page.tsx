@@ -21,15 +21,12 @@ export default function SettingsPage() {
   const [jackyun, setJackyun] = useState<TestState>({ loading: false });
   const [opening, setOpening] = useState<OpeningData | null>(null);
   const [openMsg, setOpenMsg] = useState("");
-  // 期初录入表单
   const [oKind, setOKind] = useState("platform_receivable");
   const [oRef, setORef] = useState("");
   const [oAmount, setOAmount] = useState("");
   const [oQty, setOQty] = useState("");
   const [oNote, setONote] = useState("");
   const [oDate, setODate] = useState("");
-
-  // 修改密码
   const [pwOld, setPwOld] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwMsg, setPwMsg] = useState("");
@@ -97,9 +94,9 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold">设置 · 数据连接</h1>
+      <h1 className="text-xl font-semibold">系统设置</h1>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-        凭证只保存在服务器端（.env / 数据库加密），不回传前端。未配置的系统如实显示，不使用模拟数据伪装连接。
+        这里只保留账号安全、数据连接和系统级参数。仓库、生产、货品等业务配置统一回到各自业务页面维护。
       </p>
 
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
@@ -177,7 +174,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* 1688 OAuth（规格 7.2：未配置如实显示等待，不伪造已连接） */}
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">1688 采购授权</div>
         <p className="mt-1 text-xs text-gray-400">
@@ -212,7 +208,6 @@ export default function SettingsPage() {
         请勿在路由器做端口转发，勿将 8000 暴露公网；如需公网访问，必须增加 TLS 和更严格的网络边界。
       </div>
 
-      {/* 期初初始化（规格 11） */}
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">期初初始化（一次性向导）</div>
         <p className="mt-1 text-xs text-gray-400">

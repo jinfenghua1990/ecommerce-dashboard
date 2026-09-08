@@ -34,7 +34,15 @@ OPEN_SUPPLY_STATUSES = {
     "shipped",
     "arrived",
 }
-OPEN_PRODUCTION_STATUSES = {"planned", "confirmed", "producing"}
+OPEN_PRODUCTION_STATUSES = {
+    "planned",
+    "confirmed",
+    "producing",
+    "produced",
+    "shipped",
+    "arrived",
+    "inbound",
+}
 
 
 class ProductionItemInput(BaseModel):
@@ -85,7 +93,10 @@ def replenishment(
     数据来源：
     - 当前库存：吉客云最新库存快照；
     - 近销：本地销售订单明细 quantity，剔除取消/作废/待审核订单；
-    - 待供应：已确认尚未入库的采购数量 + 计划中/已确认/生产中的未完成生产数量。
+    - 待供应：已确认尚未入库的采购数量 + 非取消生产单中尚未关联真实入库的生产数量。
+
+    生产完成、工厂待发、成品在途和已到货待入库仍然属于“待供应”；只有关联真实吉客云
+    入库后才从生产待供应中退出，避免生产完成瞬间重复触发补货。
 
     建议补货 = max(日均销量 × (交期天数 + 安全天数) - 当前库存 - 待供应, 0)。
     无库存快照或观察期无销量时不伪造建议数量，返回 null 并给出原因。
@@ -149,14 +160,14 @@ def replenishment(
             ProductionOrderItem.sku_id,
             ProductionOrderItem.sku_code,
             func.coalesce(
-                func.sum(ProductionOrderItem.quantity - ProductionOrderItem.completed_qty),
+                func.sum(ProductionOrderItem.quantity - ProductionOrderItem.inbound_qty),
                 0,
             ),
         )
         .join(ProductionOrder, ProductionOrder.id == ProductionOrderItem.production_order_id)
         .filter(
             ProductionOrder.status.in_(OPEN_PRODUCTION_STATUSES),
-            ProductionOrderItem.quantity > ProductionOrderItem.completed_qty,
+            ProductionOrderItem.quantity > ProductionOrderItem.inbound_qty,
         )
         .group_by(ProductionOrderItem.sku_id, ProductionOrderItem.sku_code)
         .all()

@@ -17,7 +17,8 @@ from app.models.jky_web import JkyWebStockinItem, JkyWebStockinOrder
 from app.models.procurement_chain import ProcurementChainLink
 
 
-# 只识别有业务前缀的编号，避免把 1688 订单号或备注里的普通数字误当成入库单。
+# 兼容常见 RK/CG/PO 格式；真正建链时还会拿吉客云已知入库单号反查备注，
+# 因而不要求实际单号必须以这些前缀开头。
 _REFERENCE_RE = re.compile(
     r"(?<![A-Z0-9])(?:RK|CG|PO)\s*[-_:：#]?\s*"
     r"[A-Z0-9][A-Z0-9_-]{5,}(?![A-Z0-9])",
@@ -37,7 +38,7 @@ def normalize_reference(value: object) -> str:
 
 
 def extract_reference_numbers(remark: str | None) -> list[str]:
-    """从自由格式备注提取去重后的候选单号，顺序按备注中的出现位置保留。"""
+    """从自由格式备注提取常见格式候选单号，顺序按备注中的出现位置保留。"""
     text = unicodedata.normalize("NFKC", str(remark or "")).upper()
     matches: list[tuple[int, str]] = []
     for pattern, group in ((_REFERENCE_RE, 0), (_LABELLED_REFERENCE_RE, 1)):
@@ -52,6 +53,29 @@ def extract_reference_numbers(remark: str | None) -> list[str]:
     return references
 
 
+def extract_known_reference_numbers(
+    remark: str | None,
+    known_numbers: Iterable[str],
+) -> list[str]:
+    """用吉客云已知入库单号反查 1688 备注。
+
+    这是主链路的稳健兜底：实际吉客云单号不一定以 RK/CG/PO 开头，
+    只要该单号已存在于吉客云入库数据中，并原样（允许空格、横杠、全角符号差异）
+    出现在 1688 备注里，就可作为候选。为避免短数字误命中，规范化后少于 6 位的不参与。
+    """
+    remark_normalized = normalize_reference(remark)
+    if not remark_normalized:
+        return []
+    matches: list[str] = []
+    for raw in known_numbers:
+        normalized = normalize_reference(raw)
+        if len(normalized) < 6:
+            continue
+        if normalized in remark_normalized and normalized not in matches:
+            matches.append(normalized)
+    return matches
+
+
 def classify_remark_references(
     remark: str | None,
     known_numbers: Iterable[str],
@@ -59,6 +83,9 @@ def classify_remark_references(
     """纯函数分类候选编号，便于同步前先做可重复测试。"""
     known = {normalize_reference(value): str(value) for value in known_numbers}
     references = extract_reference_numbers(remark)
+    for value in extract_known_reference_numbers(remark, known.values()):
+        if value not in references:
+            references.append(value)
     matched = [known[value] for value in references if value in known]
     unverified = [value for value in references if value not in known]
     return {
@@ -130,8 +157,9 @@ def run_verified_remark_match(
 ) -> dict[str, int]:
     """核验 1688 备注中的单号，并为唯一的吉客云入库单自动建确认链。
 
-    正则只负责找候选；只有本地 ``jackyun_goods_documents`` 中存在唯一同号入库单，
-    且该入库单没有被其他订单确认占用时，才会写入 confirmed 链路。
+    备注识别采用两层：常见格式提取 + 吉客云已知入库单号反查。
+    只有本地存在唯一同号入库单，且该入库单没有被其他订单确认占用时，
+    才会写入 confirmed 链路；任何不唯一或未核验情况都不会自动乱配。
     """
     query = db.query(Alibaba1688Order).join(
         Alibaba1688FileImport,
@@ -147,7 +175,8 @@ def run_verified_remark_match(
             return {
                 "ordersScanned": 0, "remarksWithReferences": 0, "referencesFound": 0,
                 "linked": 0, "upgraded": 0, "alreadyLinked": 0,
-                "unverified": 0, "conflicts": 0, "rejected": 0, "allocSeeded": 0,
+                "unverified": 0, "conflicts": 0, "rejected": 0,
+                "materializedJkyWeb": 0, "allocSeeded": 0,
             }
         query = query.filter(Alibaba1688Order.id.in_(ids))
     orders = query.order_by(Alibaba1688Order.id).all()
@@ -164,6 +193,11 @@ def run_verified_remark_match(
         reference = normalize_reference(web_order.goodsdoc_no)
         if reference:
             web_orders_by_reference[reference].append(web_order)
+
+    known_references = list(dict.fromkeys([
+        *documents_by_reference.keys(),
+        *web_orders_by_reference.keys(),
+    ]))
 
     links = db.query(ProcurementChainLink).filter(
         ProcurementChainLink.target_type == "inbound",
@@ -190,6 +224,9 @@ def run_verified_remark_match(
 
     for order in orders:
         references = extract_reference_numbers(order.order_remark)
+        for value in extract_known_reference_numbers(order.order_remark, known_references):
+            if value not in references:
+                references.append(value)
         if not references:
             continue
         stats["remarksWithReferences"] += 1

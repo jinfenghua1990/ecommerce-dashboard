@@ -243,12 +243,8 @@ def _step_states(row: dict) -> dict[str, dict]:
     sku_linked = [a for a in allocations if a.get("skuId")]
     purchase_orders = row.get("purchaseOrders") or []
     inbound = row.get("inbound") or []
-    # 1688 原始报文的货品明细（含编号）。未关联入库单时没有分配行，
-    # 「确认采购内容」环节用它兜底，避免用户看到一片空白（2026-09-07）。
     order_items = row.get("orderItems") or []
     order_item_codes = [i.get("productNumber") for i in order_items if i.get("productNumber")]
-    # 耗材收货（本平台自有流程，不生成吉客云单据）：收货即入库，明细自带编号。
-    # 已收货的耗材单不能再按「吉客云采购单」那套卡在待确认/待匹配/待生成（2026-09-07）。
     consumable = row.get("consumable") or {}
     consumable_received = bool(consumable.get("received"))
     consumable_items = consumable.get("items") or []
@@ -278,9 +274,7 @@ def _step_states(row: dict) -> dict[str, dict]:
     ) or consumable_received
     invoice = row.get("invoice") or []
     settlement = row.get("settlement") or []
-    # 吉客云结算单在本账号恒为空，1688 担保交易的实付记录同样是付款事实。
     paid_any = any(s.get("paid") for s in settlement) or bool(row.get("paidOn1688"))
-    # 开票口径：采购员只负责催票，认证（勾选抵扣）归财务，不再作为采购台卡点（2026-09-07）。
     invoice_status = row.get("invoiceStatus") or "none"
     invoice_done = invoice_status == "done"
     invoice_outstanding = row.get("invoiceOutstanding")
@@ -327,7 +321,6 @@ def _step_states(row: dict) -> dict[str, dict]:
             "amount": sum(p.get("amount") or 0 for p in purchase_orders) or None,
         },
         "closeout": {
-            # 认证归财务：只要 入库 + 票已开够 + 已付款，采购员这单就算收尾完成。
             "done": inbound_ready and invoice_done and paid_any,
             "detail": (
                 ("耗材已入库" if consumable_received else f"入库 {len(inbound)}")
@@ -348,20 +341,13 @@ def _first_undone_step(states: dict[str, dict]) -> str | None:
 
 
 def closeout_stage(row: dict, step_states: dict[str, dict] | None = None) -> str:
-    """收尾环节细分到具体卡点，供列表状态标签直接显示（待收票 / 待付款 / 待认证）。
-
-    5 步视图把入库/发票/付款/认证合并成 closeout，笼统显示「待收尾」看不出卡在哪；
-    这里按「没入库 -> 票没开够 -> 没付款」的顺序给出真正的缺口。
-    认证（勾选抵扣）归财务，不再作为采购员卡点（2026-09-07 用户口径）。
-    """
+    """收尾环节细分到具体卡点，供列表状态标签直接显示。"""
     states = step_states or _step_states(row)
     if states.get("closeout", {}).get("done"):
         return "done"
-    # 耗材收货（本平台）等同于入库完成，不能再报「待入库」（2026-09-07）。
     consumable_received = bool((row.get("consumable") or {}).get("received"))
     if not consumable_received and not (row.get("inbound") or []):
         return "awaiting_inbound"
-    # 票没开够（含一张没开 / 部分开票）→ 待供应商开票，这是采购员要催的事。
     if (row.get("invoiceOutstanding") or 0) > 0 or not (row.get("invoice") or []):
         return "awaiting_invoice"
     paid_any = any(s.get("paid") for s in (row.get("settlement") or [])) or bool(row.get("paidOn1688"))
@@ -371,7 +357,6 @@ def closeout_stage(row: dict, step_states: dict[str, dict] | None = None) -> str
 
 
 # ---------- 接口实现 ----------
-
 def funnel(db: Session) -> dict:
     """5 步漏斗：每步 count = 已完成该步的订单数。"""
     pf = ChainPrefetch(db)
@@ -435,13 +420,15 @@ def summary(db: Session) -> dict:
                 and not row.get("jackyunPoBypassed"):
             pending_po += 1
         inbound = row.get("inbound") or []
+        consumable_received = bool((row.get("consumable") or {}).get("received"))
+        inbound_ready = (
+            bool(inbound) and all(item.get("consumableUsageDecided") for item in inbound)
+        ) or consumable_received
         if purchase_orders and not inbound_ready:
             pending_inbound += 1
         invoice = row.get("invoice") or []
-        if inbound and not invoice:
+        if inbound_ready and not invoice:
             pending_invoice += 1
-    # 与 list_orders 的 status=exception 筛选口径保持一致：
-    # 只统计能明确关联到某张采购单的异常，避免摘要 "异常 2" 但点进去列表为空。
     exception_ids = _exception_order_ids(db)
     exception_count = sum(
         1 for row in rows
@@ -485,7 +472,6 @@ def _time_group_label(t: datetime | None, today: date) -> str:
     return d.isoformat()
 
 
-# 扩展状态筛选：保留旧值，同时提供工作台规格中的业务状态。
 _VALID_STATUSES = {
     "all", "pending", "done", "order", "content", "sku", "jackyun_po", "closeout",
     "refine", "po", "inbound", "invoice", "exception",
@@ -530,8 +516,6 @@ def _matches_status(row: dict, states: dict[str, dict], first: str | None, statu
     inbound = row.get("inbound") or []
     invoice = row.get("invoice") or []
     sku_complete = bool(allocations) and all(allocation.get("skuId") for allocation in allocations)
-    # 就地计算入库是否完成（耗材收货视同入库）；此前引用了 _step_states 的局部变量，
-    # status="inbound" 且订单有采购单时会直接 NameError → 500（2026-09-07 顺手修掉）。
     inbound_ready = (
         bool(inbound) and all(item.get("consumableUsageDecided") for item in inbound)
     ) or bool((row.get("consumable") or {}).get("received"))
@@ -543,13 +527,11 @@ def _matches_status(row: dict, states: dict[str, dict], first: str | None, statu
     if status == "inbound":
         return bool(purchase_orders) and not inbound_ready
     if status == "invoice":
-        # 供应商待开发票（采购员催票口径）：票没开够就算，含完全未开票与部分开票。
         return (row.get("invoiceOutstanding") or 0) > 0 or not invoice
     if status == "exception":
         return row.get("orderId") in exception_ids or row.get("externalPoId") in exception_ids
     if status == "pending":
         return first is not None
-    # 精确匹配最早未完成步骤
     return first == status
 
 
@@ -613,23 +595,17 @@ def list_orders(
                 bool(row.get("inbound")) and all(item.get("consumableUsageDecided") for item in row.get("inbound") or [])
             ) or bool((row.get("consumable") or {}).get("received")),
             "invoiceDone": bool(row.get("invoice")),
-            # 供应商待开发票（采购员催票口径）：invoicedAmount=已收票、invoiceOutstanding=还差多少。
-            # invoiceStatus: pending=完全未开票 / partial=部分开票 / done=已开够 / none=无实付金额
             "invoiceStatus": row.get("invoiceStatus") or "none",
             "invoicedAmount": row.get("invoicedAmount"),
             "invoiceOutstanding": row.get("invoiceOutstanding"),
-            # 收尾环节的具体卡点：待入库 / 待开发票 / 待付款，供状态标签直接显示。
             "closeoutStage": closeout_stage(row, states),
         })
 
-    # 排序
     if sort_by == "amount":
         out.sort(key=lambda r: (r.get("amount") or 0), reverse=True)
     elif sort_by == "invoice":
-        # 催票视角：未开票金额大的排前面，已开够的沉底。
         out.sort(key=lambda r: (r.get("invoiceOutstanding") or 0), reverse=True)
     elif sort_by == "status":
-        # 完成度高在前
         out.sort(key=lambda r: r.get("doneCount") or 0, reverse=True)
     else:
         out.sort(key=lambda r: r.get("orderDate") or "", reverse=True)
@@ -638,7 +614,6 @@ def list_orders(
     start = max(0, (page - 1) * page_size)
     paged = out[start:start + page_size]
 
-    # 按时间标签分组（保持排序：第一次出现的 label 顺序即为排序结果）
     group_order: list[str] = []
     groups: dict[str, list[dict]] = {}
     for item in paged:
@@ -652,7 +627,6 @@ def list_orders(
         "total": total_filtered,
         "page": page,
         "pageSize": page_size,
-        # 催票总额：当前筛选结果里还差多少票没开（采购员要催的合计）。
         "invoiceOutstandingTotal": round(sum(r.get("invoiceOutstanding") or 0 for r in out), 2),
         "groups": [{"label": k, "items": groups[k]} for k in group_order],
     }
@@ -661,7 +635,6 @@ def list_orders(
 def workbench(db: Session, order_id: int) -> dict | None:
     """选中订单的工作面板：5 步骤每步的状态 + 关键明细 + 跳转入口。"""
     pf = ChainPrefetch(db)
-    # 工作台专用 ID：文件订单用正数，工作流独有订单用负数，避免两张表主键撞车。
     order: Alibaba1688Order | None = None
     external: ExternalPurchaseOrder | None = None
     for candidate_order, candidate_external in _source_pairs(db):
@@ -710,10 +683,7 @@ def workbench(db: Session, order_id: int) -> dict | None:
         "stepStates": states,
         "detail": {
             "allocations": row.get("allocations") or [],
-            # 1688 原始报文货品明细（编号/品名/数量/单价/收货状态）。
-            # 分配行为空时作为「采购内容」的唯一来源，前端据此展示编号。
             "orderItems": row.get("orderItems") or [],
-            # 耗材采购 + 收货（本平台，不生成吉客云单据）：已收货即视为内容确认 + 入库完成。
             "consumable": row.get("consumable"),
             "expenses": row.get("expenses") or [],
             "purchaseOrders": row.get("purchaseOrders") or [],

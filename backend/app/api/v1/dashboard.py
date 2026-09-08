@@ -140,6 +140,7 @@ def save_product(body: ProductSkuBody, request: Request,
         product = db.get(Product, sku.product_id)
         if product is not None and body.goods_category.strip() != (product.category or ""):
             product.category = body.goods_category.strip()
+            product.raw = {**(product.raw or {}), "categoryLocallyEdited": True}
     db.commit()
     audit(db, current_actor(request), "catalog.product_sku.save", "product_skus", sku.id, {"skuCode": sku.sku_code})
     return {"id": sku.id, "skuCode": sku.sku_code, "jackyunSkuId": sku.jackyun_sku_id}
@@ -170,6 +171,47 @@ def update_cost_policy(sku_id: int, body: CostPolicyBody, request: Request,
     db.commit()
     audit(db, current_actor(request), "catalog.cost_policy.update", "product_skus", sku.id, {"mode": sku.cost_mode})
     return {"id": sku.id, "costMode": sku.cost_mode, "costTolerancePct": str(sku.cost_tolerance_pct)}
+
+
+class CategoryBody(BaseModel):
+    kind: str  # goods / consumable
+    id: int
+    category: str
+
+
+@router.post("/catalog/category")
+def update_category(body: CategoryBody, request: Request,
+                    db: Session = Depends(get_db)) -> dict[str, Any]:
+    """行内修改品类：正品写 Product.category（吉客云同步后以本地值为准），耗材写 Consumable.category。"""
+    category = body.category.strip()
+    if len(category) > 128:
+        raise HTTPException(400, "品类名称过长")
+    if body.kind == "goods":
+        sku = db.get(ProductSku, body.id)
+        if sku is None:
+            raise HTTPException(404, "SKU 不存在")
+        if sku.product_id is None:
+            raise HTTPException(400, "该 SKU 未关联货品主档，请先在编辑表单中补充")
+        product = db.get(Product, sku.product_id)
+        if product is None:
+            raise HTTPException(404, "货品主档不存在")
+        before = product.category or ""
+        product.category = category
+        product.raw = {**(product.raw or {}), "categoryLocallyEdited": True}
+        target, label = "products", sku.sku_code
+    elif body.kind == "consumable":
+        row = db.get(Consumable, body.id)
+        if row is None:
+            raise HTTPException(404, "耗材不存在")
+        before = row.category or ""
+        row.category = category
+        target, label = "consumables", row.code
+    else:
+        raise HTTPException(400, "kind 必须是 goods 或 consumable")
+    db.commit()
+    audit(db, current_actor(request), "catalog.category.update", target, body.id,
+          {"code": label, "before": before, "after": category})
+    return {"ok": True, "kind": body.kind, "id": body.id, "category": category}
 
 
 class TaxCodeBulkBody(BaseModel):

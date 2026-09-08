@@ -34,9 +34,16 @@ jobs:
       DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/ecommerce
       REDIS_URL: redis://127.0.0.1:6379/0
       APP_SECRET_KEY: ci-only-test-secret-not-for-production-2026
+      JACKYUN_SYNC_MODE: manual
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - name: Repository hygiene (blocking)
+        run: |
+          bash scripts/repo-hygiene.sh
+      - name: Secret scan (blocking)
+        run: |
+          bash scripts/secret-scan.sh
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -47,46 +54,108 @@ jobs:
       - name: Migrate
         run: |
           cd backend && alembic upgrade head
+      - name: Validate ops scripts and FK orphan audit
+        env:
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+        run: |
+          bash -n scripts/*.sh
+          bash scripts/orphan-audit.sh
+      - name: Backup and restore drill (PostgreSQL 17 tools)
+        run: |
+          set -euo pipefail
+          PG_CONTAINER="$(docker ps --filter 'ancestor=postgres:17' --format '{{.ID}}' | head -1)"
+          test -n "$PG_CONTAINER"
+          DUMP=/tmp/ecom-ci-backup.dump
+          CHECK_DB="ecommerce_restorecheck_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+              dropdb -h 127.0.0.1 -U ecommerce --if-exists "$CHECK_DB" >/dev/null 2>&1 || true
+            rm -f "$DUMP"
+          }
+          trap cleanup EXIT
+
+          docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            pg_dump -h 127.0.0.1 -U ecommerce -Fc ecommerce > "$DUMP"
+          test -s "$DUMP"
+
+          docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            createdb -h 127.0.0.1 -U ecommerce "$CHECK_DB"
+          cat "$DUMP" | docker exec -i -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            pg_restore -h 127.0.0.1 -U ecommerce -d "$CHECK_DB" \
+              --no-owner --no-privileges --exit-on-error
+
+          TABLE_COUNT="$(docker exec -e PGPASSWORD=ecommerce "$PG_CONTAINER" \
+            psql -h 127.0.0.1 -U ecommerce -d "$CHECK_DB" -Atc \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")"
+          test "$TABLE_COUNT" -gt 0
+
+          export DATABASE_URL="postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/$CHECK_DB"
+          cd backend
+          alembic upgrade head
+          alembic current
       - name: Lint new domain changes (blocking)
         run: |
           cd backend && python -m pyflakes \
             app/api/v1/supply_chain.py \
-            app/services/production_service.py \
-            app/models/production.py \
+            app/api/v1/supply_chain_material_flow.py \
+            app/api/v1/supply_chain_finished_flow.py \
             app/api/v1/tax_accounting.py \
             app/api/v1/tax_invoices.py \
+            app/services/consumable_service.py \
+            app/services/production_service.py \
+            app/services/production_material_flow_service.py \
+            app/services/production_finished_flow_service.py \
+            app/services/monthly_core.py \
+            app/services/closing.py \
             app/services/tax_accounting_service.py \
             app/services/tax_finance_summary_service.py \
             app/services/finance_service.py \
+            app/models/production.py \
             app/tasks/sync.py \
             app/celery_app.py \
+            app/tests/test_supply_chain_production.py \
+            app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_supply_chain_finished_flow.py \
+            app/tests/test_monthly_core.py \
             app/tests/test_tax_accounting_truth.py \
-            app/tests/test_tax_finance_summary.py \
-            app/tests/test_supply_chain_production.py
-      - name: Test supply-chain and tax accounting (blocking)
+            app/tests/test_tax_finance_summary.py
+      - name: Runtime undefined-name scan (blocking)
+        run: |
+          cd backend
+          python -m pyflakes app 2>&1 | tee /tmp/pyflakes.txt || true
+          if grep -E "undefined name|referenced before assignment" /tmp/pyflakes.txt; then
+            echo "Runtime-level static error detected"
+            exit 1
+          fi
+      - name: Test new domain changes (blocking)
         run: |
           cd backend && python -m pytest \
             app/tests/test_supply_chain_production.py \
+            app/tests/test_supply_chain_material_flow.py \
+            app/tests/test_supply_chain_finished_flow.py \
+            app/tests/test_monthly_core.py \
             app/tests/test_tax_accounting_truth.py \
             app/tests/test_tax_finance_summary.py \
             -q --tb=short
-      - name: Legacy lint report (non-blocking until existing debt is cleaned)
-        continue-on-error: true
-        run: |
-          cd backend && python -m pyflakes app
-      - name: Legacy full test report (non-blocking until existing debt is cleaned)
-        continue-on-error: true
+      - name: Full backend test suite (blocking)
         run: |
           cd backend && python -m pytest app/tests -q --tb=short
+      - name: Pyflakes debt budget (blocking)
+        run: |
+          bash scripts/pyflakes-budget.sh 15
 
   frontend:
-    name: Frontend (typecheck)
+    name: Frontend (typecheck + static build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Install deps
@@ -95,3 +164,20 @@ jobs:
       - name: Typecheck (tsc)
         run: |
           cd frontend && npx tsc --noEmit
+      - name: Production static build
+        run: |
+          cd frontend && npm run build
+          test -f out/index.html
+
+  deployment:
+    name: Deployment image (single-port 8000)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate compose topology
+        run: |
+          cp .env.example .env
+          docker compose config -q
+      - name: Build unified production image
+        run: |
+          docker build -f Dockerfile -t ecommerce-dashboard:ci .

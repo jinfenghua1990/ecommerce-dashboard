@@ -1,16 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { consumablesApi, type ConsumablePurchaseDetail, type ConsumablePurchaseRow, type ConsumablePurchaseSource, type ConsumableRow } from "@/lib/api";
+import { authenticatedFetch, consumablesApi, type ConsumablePurchaseDetail, type ConsumablePurchaseRow, type ConsumablePurchaseSource, type ConsumableRow } from "@/lib/api";
 import { newRequestKey } from "@/lib/request-key";
 
 type Props = { materials: ConsumableRow[]; reload: () => void; initialPurchaseId?: number; sourceOrderId?: number };
+type WarehouseOption = { id: number; code: string; name: string; warehouseType: string; purpose: string; isSellable: boolean; status: string };
 const STATUS = { ordered: "待收货", partial: "部分收货", received: "已收齐", cancelled: "已取消" };
 const money = (value: string | number) => `¥${Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qty = (value: string | number) => Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 const inputClass = "h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-50";
 const today = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`; };
 const blankLine = () => ({ consumable_id: "", quantity: "", unit_cost: "" });
+
+async function fetchWarehouses(): Promise<WarehouseOption[]> {
+  const res = await authenticatedFetch("/api/v1/warehouses?include_inactive=false", { cache: "no-store" });
+  if (!res.ok) throw new Error(`仓库加载失败（${res.status}）`);
+  return res.json();
+}
+
+async function receiveToWarehouse(purchaseId: number, body: Record<string, unknown>): Promise<ConsumablePurchaseDetail> {
+  const res = await authenticatedFetch(`/api/v1/warehouses/consumable-purchases/${purchaseId}/receipts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { detail?: unknown };
+    throw new Error(typeof data.detail === "string" ? data.detail : `收货失败（${res.status}）`);
+  }
+  return res.json();
+}
 
 export default function ConsumablePurchases({ materials, reload, initialPurchaseId, sourceOrderId }: Props) {
   const [orders, setOrders] = useState<ConsumablePurchaseRow[]>([]);
@@ -29,6 +49,8 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
   const [receiving, setReceiving] = useState(false);
   const [receipt, setReceipt] = useState({ received_on: "", note: "", request_key: "" });
   const [receiptQtys, setReceiptQtys] = useState<Record<number, string>>({});
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [receiptWarehouseId, setReceiptWarehouseId] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,6 +59,9 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
     finally { setLoading(false); }
   }, [query, sourceOrderId]);
   useEffect(() => { const timer = setTimeout(() => void load(), 200); return () => clearTimeout(timer); }, [load]);
+  useEffect(() => {
+    fetchWarehouses().then(setWarehouses).catch((e) => setError(String(e)));
+  }, []);
   useEffect(() => {
     if (!initialPurchaseId) return;
     let cancelled = false;
@@ -83,6 +108,9 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
   }
   function startReceipt() {
     if (!detail) return;
+    const allowed = warehouses.filter((row) => row.status === "active" && (row.purpose === "consumable" || row.purpose === "both"));
+    const preferred = allowed.find((row) => row.warehouseType === "factory") ?? allowed[0];
+    setReceiptWarehouseId(preferred ? String(preferred.id) : "");
     setReceipt({ received_on: today(), note: "", request_key: newRequestKey() });
     setReceiptQtys(Object.fromEntries(detail.items.map((line) => [line.id, ""])));
     setError(""); setReceiving(true);
@@ -92,10 +120,12 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
     const items = detail.items.filter((line) => receiptQtys[line.id]?.trim() && Number(receiptQtys[line.id]) !== 0)
       .map((line) => ({ item_id: line.id, quantity: receiptQtys[line.id] }));
     if (!items.length) { setError("请填写本次实收数量，未到货的耗材留空。"); return; }
+    if (!receiptWarehouseId) { setError("请选择本次收货进入哪个仓库。"); return; }
     setBusy(true); setError("");
     try {
-      setDetail(await consumablesApi.receivePurchase(detail.id, { ...receipt, items }));
-      setReceiving(false); setNotice("收货已登记，实收数量已进入耗材库存。"); reload(); await load();
+      const selected = warehouses.find((row) => row.id === Number(receiptWarehouseId));
+      setDetail(await receiveToWarehouse(detail.id, { ...receipt, warehouse_id: Number(receiptWarehouseId), items }));
+      setReceiving(false); setNotice(`收货已登记，实收数量已进入${selected ? `“${selected.name}”` : "所选仓库"}。`); reload(); await load();
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
@@ -108,9 +138,10 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
   }
 
   const visible = orders.filter((row) => filter === "all" || row.status === filter);
+  const receiptWarehouses = warehouses.filter((row) => row.status === "active" && (row.purpose === "consumable" || row.purpose === "both"));
   return <section className="mt-5">
     <div className="flex flex-wrap items-start justify-between gap-4">
-      <div><h2 className="text-lg font-semibold text-slate-800">耗材采购</h2><p className="mt-1 text-sm text-slate-500">建采购单 → 分批收货 → 耗材库存。收货在本平台登记。</p></div>
+      <div><h2 className="text-lg font-semibold text-slate-800">耗材采购</h2><p className="mt-1 text-sm text-slate-500">建采购单 → 分批收货 → 选择仓库入库。仓库可在设置中自行维护。</p></div>
       <button onClick={() => void openNew()} disabled={!materials.length || busy} className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">+ 新建耗材采购单</button>
     </div>
     {sourceOrderId && <div className="mt-3 flex items-center justify-between rounded-lg bg-indigo-50 px-4 py-3 text-sm text-indigo-700"><span>正在查看所选 1688 订单关联的耗材采购</span><a href="/purchase/workbench?view=products&productTab=consumables" className="underline">前往耗材库</a></div>}
@@ -119,7 +150,7 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
     <div className="mt-5 flex flex-wrap gap-3">
       <input aria-label="搜索耗材采购单" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索采购单、供应商或来源订单号" className={`${inputClass} max-w-md`} />
       <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-        {[['all', '全部'], ...Object.entries(STATUS)].map(([key, label]) => <button key={key} onClick={() => setFilter(key)} className={`rounded-md px-3 py-1.5 text-sm ${filter === key ? "bg-white font-medium text-indigo-700 shadow-sm" : "text-slate-500"}`}>{label}</button>)}
+        {[["all", "全部"], ...Object.entries(STATUS)].map(([key, label]) => <button key={key} onClick={() => setFilter(key)} className={`rounded-md px-3 py-1.5 text-sm ${filter === key ? "bg-white font-medium text-indigo-700 shadow-sm" : "text-slate-500"}`}>{label}</button>)}
       </div>
     </div>
     <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
@@ -149,7 +180,7 @@ export default function ConsumablePurchases({ materials, reload, initialPurchase
       <form onSubmit={saveReceipt}>
         <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="border-y border-slate-100 text-xs text-slate-500"><tr><th className="py-3">耗材</th><th className="text-right">采购量</th><th className="text-right">已收</th><th className="text-right">待收</th><th className="text-right">单价</th>{receiving && <th className="w-36 pl-4">本次实收</th>}</tr></thead>
           <tbody className="divide-y divide-slate-100">{detail.items.map((line) => { const remaining = Number(line.quantity) - Number(line.receivedQty); return <tr key={line.id}><td className="py-4"><div>{line.name}</div><div className="mt-1 font-mono text-xs text-slate-400">{line.code}</div></td><td className="text-right">{qty(line.quantity)} {line.unit}</td><td className="text-right">{qty(line.receivedQty)}</td><td className="text-right font-medium">{qty(remaining)}</td><td className="text-right">{money(line.unitCost)}</td>{receiving && <td className="pl-4"><input aria-label={`${line.name}本次实收`} type="number" min="0" max={remaining} step="0.0001" disabled={remaining === 0 || busy} value={receiptQtys[line.id] ?? ""} onChange={(e) => setReceiptQtys({ ...receiptQtys, [line.id]: e.target.value })} placeholder="未到货留空" className={inputClass} /></td>}</tr>; })}</tbody></table></div>
-        {receiving && <div className="mt-4 rounded-lg bg-indigo-50/50 p-4"><div className="grid gap-3 sm:grid-cols-[180px_1fr]"><label className="text-xs text-slate-600">实际收货日期<input aria-label="实际收货日期" type="date" required min={detail.orderedOn} value={receipt.received_on} onChange={(e) => setReceipt({ ...receipt, received_on: e.target.value })} className={`mt-1 ${inputClass}`} /></label><label className="text-xs text-slate-600">收货备注<input value={receipt.note} onChange={(e) => setReceipt({ ...receipt, note: e.target.value })} placeholder="例如签收人、收货地点或送货单号" className={`mt-1 ${inputClass}`} /></label></div><p className="mt-3 text-xs text-slate-500">只登记本次实际收到的数量，可多次分批收货。</p><div className="mt-3 flex justify-end gap-2"><button type="button" disabled={busy} onClick={() => setReceiving(false)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">取消</button><button disabled={busy} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "正在入库…" : "确认收货入库"}</button></div></div>}
+        {receiving && <div className="mt-4 rounded-lg bg-indigo-50/50 p-4"><div className="grid gap-3 sm:grid-cols-[180px_220px_1fr]"><label className="text-xs text-slate-600">实际收货日期<input aria-label="实际收货日期" type="date" required min={detail.orderedOn} value={receipt.received_on} onChange={(e) => setReceipt({ ...receipt, received_on: e.target.value })} className={`mt-1 ${inputClass}`} /></label><label className="text-xs text-slate-600">入库仓库<select required value={receiptWarehouseId} onChange={(e) => setReceiptWarehouseId(e.target.value)} className={`mt-1 ${inputClass}`}><option value="">请选择仓库</option>{receiptWarehouses.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.warehouseType === "factory" ? "工厂仓" : row.warehouseType === "b2c" ? "B2C仓" : "其他"}</option>)}</select></label><label className="text-xs text-slate-600">收货备注<input value={receipt.note} onChange={(e) => setReceipt({ ...receipt, note: e.target.value })} placeholder="例如签收人、送货单号" className={`mt-1 ${inputClass}`} /></label></div><div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs text-slate-500">默认优先选择工厂仓；仓库名称和用途可在 <a href="/settings/warehouses" className="text-indigo-600 underline">设置 → 仓库配置</a> 修改。</p><div className="flex gap-2"><button type="button" disabled={busy} onClick={() => setReceiving(false)} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm">取消</button><button disabled={busy || !receiptWarehouseId} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white disabled:opacity-50">{busy ? "正在入库…" : "确认收货入库"}</button></div></div></div>}
       </form>
       <div className="mt-5 border-t border-slate-100 pt-4"><h4 className="text-sm font-semibold text-slate-700">收货记录 <span className="ml-1 font-normal text-slate-400">{detail.receipts.length} 次</span></h4>
         {detail.receipts.map((item) => <div key={item.id} className="mt-3 rounded-lg bg-slate-50 px-4 py-3"><div className="flex flex-wrap justify-between gap-2 text-xs"><span className="font-mono text-slate-600">{item.number}</span><span className="text-slate-400">{item.receivedOn} · {item.createdBy}</span></div><p className="mt-2 text-sm text-slate-700">{item.items.map((line) => `${line.name} × ${qty(line.quantity)} ${line.unit}`).join("；")}</p>{item.note && <p className="mt-1 text-xs text-slate-400">{item.note}</p>}</div>)}

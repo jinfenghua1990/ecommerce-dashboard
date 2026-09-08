@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
@@ -95,6 +97,37 @@ def test_login_success_and_me(client, db_session):
     db_session.execute(delete(AuditLog).where(AuditLog.actor == "alice"))
     db_session.execute(delete(UserRole).where(UserRole.user_id == user.id))
     db_session.execute(delete(User).where(User.id == user.id))
+    db_session.commit()
+
+
+@pytest.mark.skipif(settings.ACCESS_MODE == "open", reason="open 模式不依赖登录态确定当前操作者")
+def test_login_rehashes_legacy_pbkdf2_work_factor(client, db_session):
+    """旧 120k PBKDF2 hash 仍可登录，并在成功登录后平滑升级为当前 600k。"""
+    password = "legacy-pass-123"
+    salt = b"legacy-salt-1234"
+    iterations = 120_000
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    legacy_hash = f"pbkdf2_sha256${iterations}${salt.hex()}${dk.hex()}"
+    user = User(username="legacy-user", display_name="", hashed_password=legacy_hash)
+    db_session.add(user)
+    db_session.flush()
+    user_id = user.id
+
+    r = client.post(
+        "/api/v1/auth/login",
+        json={"username": "legacy-user", "password": password},
+    )
+    assert r.status_code == 200, r.text
+
+    db_session.expire_all()
+    fresh = db_session.get(User, user_id)
+    assert fresh is not None
+    assert fresh.hashed_password != legacy_hash
+    assert fresh.hashed_password.startswith("pbkdf2_sha256$600000$")
+    assert verify_password(password, fresh.hashed_password)
+
+    db_session.execute(delete(AuditLog).where(AuditLog.actor == "legacy-user"))
+    db_session.execute(delete(User).where(User.id == user_id))
     db_session.commit()
 
 

@@ -468,6 +468,10 @@ export const dashboardApi = {
     jsonFetch<{ updated: number; skipped: number; missing: number }>("/api/v1/dashboard/catalog/tax-code/bulk", {
       method: "POST", body: JSON.stringify({ items, tax_code: taxCode, overwrite }),
     }),
+  updateCategory: (kind: "goods" | "consumable", id: number, category: string) =>
+    jsonFetch<{ ok: boolean; category: string }>("/api/v1/dashboard/catalog/category", {
+      method: "POST", body: JSON.stringify({ kind, id, category }),
+    }),
   orders: (status?: string) =>
     jsonFetch<SalesOrderRow[]>(`/api/v1/dashboard/orders${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   aftersales: () => jsonFetch<AftersaleRow[]>("/api/v1/dashboard/aftersales"),
