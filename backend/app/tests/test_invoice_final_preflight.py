@@ -51,14 +51,14 @@ def test_invalid_invoice_not_counted_or_verified(db_session):
 
 def test_draft_invoice_link_stays_inactive_until_confirm(db_session, monkeypatch, tmp_path):
     monkeypatch.setattr(tax_service.settings, "DATA_DIR", str(tmp_path))
-    _, external = _order(db_session, "FINAL-DRAFT-001")
+    source, external = _order(db_session, "FINAL-DRAFT-001")
     csv = ("发票号码,开票日期,销售方名称,价税合计,发票状态,进销项,关联订单号\n" f"DRAFT-001,2026-08-05,最终预检供应商,100,正常,进项,{external.external_order_id}\n").encode()
     batch, _ = tax_service.import_export(db_session, content=csv, original_name="draft.csv", actor="pytest", auto_confirm=False)
     invoice = db_session.query(TaxInvoice).filter_by(invoice_number="DRAFT-001").one()
     link = db_session.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).one()
     assert batch.lifecycle == "draft" and batch.matched_row_count == 0
     assert link.confirmed is False and invoice.match_status == "unmatched"
-    detail = workbench.workbench(db_session, -external.id)
+    detail = workbench.workbench(db_session, source.id)
     assert detail["order"]["invoiceStatus"] == "pending"
     chain.auto_confirm_pending_links(db_session, actor="pytest"); db_session.refresh(link)
     assert link.confirmed is False
@@ -78,7 +78,6 @@ def test_invoice_reconciliation_ignores_draft_tax_batch(db_session):
     batch.lifecycle = "active"; db_session.commit()
     result = invoice_reconciliation.reconcile(db_session, supplier=external.supplier_name)
     assert "RECON-DRAFT-001" in str(result)
-
 
 
 def test_unknown_status_invoice_never_enters_procurement(db_session, monkeypatch, tmp_path):
@@ -136,7 +135,6 @@ def test_legacy_jky_invoice_link_migrates_to_source_purchase_order(db_session):
     assert link.target_type == "external_purchase_order"
     assert link.target_id == external.id
     assert link.confirmed is True
-
 
 
 def test_unknown_direction_invoice_stays_review_only(db_session, monkeypatch, tmp_path):
