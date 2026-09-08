@@ -65,8 +65,9 @@ def test_tax_import_normalizes_rows_is_idempotent_and_links_explicit_order(
     assert invoice.direction == "input"
     assert invoice.status == "issued"
     assert str(invoice.total_amount) == "113.0000"
-    assert invoice.match_status == "matched"
-    assert db_session.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).count() == 1
+    assert invoice.match_status == "unmatched"
+    link = db_session.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).one()
+    assert link.confirmed is False
 
     db_session.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).delete()
     db_session.query(TaxInvoiceImportRecord).filter_by(import_id=batch.id).delete()

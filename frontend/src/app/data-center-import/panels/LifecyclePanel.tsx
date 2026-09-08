@@ -45,6 +45,8 @@ export type LifecyclePanelConfig<Row extends { id: number }, PreviewRow> = {
   ) => ReactNode;
   /** 确认成功后的提示文案（如吉客云采购报表确认后自动映射为采购单）；返回空串则不提示。 */
   buildConfirmNotice?: (row: Row) => string;
+  allowBatchDelete?: boolean;
+  allowRowDelete?: boolean;
 };
 
 export function LifecyclePanel<Row extends { id: number }, PreviewRow>(
@@ -236,7 +238,7 @@ export function LifecyclePanel<Row extends { id: number }, PreviewRow>(
       onDeleteRow: (key) => handleRowDelete(row.id, key),
       onRestoreRow: (key) => handleRowRestore(row.id, key),
       busyRowKey: rowBusyKey,
-      editable: lifecycle !== "deleted",
+      editable: lifecycle !== "deleted" && config.allowRowDelete !== false,
     };
     return (
       <div key={row.id} className="rounded-lg border border-gray-200 bg-white">
@@ -258,7 +260,7 @@ export function LifecyclePanel<Row extends { id: number }, PreviewRow>(
                 确认并自动处理
               </button>
             )}
-            {lifecycle === "active" && (
+            {lifecycle === "active" && config.allowBatchDelete !== false && (
               <button
                 onClick={() => handleDelete(row.id)}
                 disabled={busyId === row.id}
@@ -276,7 +278,7 @@ export function LifecyclePanel<Row extends { id: number }, PreviewRow>(
                 恢复
               </button>
             )}
-            {lifecycle !== "deleted" && (
+            {lifecycle !== "deleted" && config.allowBatchDelete !== false && (
               <button
                 onClick={() => handleDelete(row.id)}
                 disabled={busyId === row.id}

@@ -12,6 +12,8 @@ export function TaxInvoicesPanel() {
         description="从税务系统导出的发票清单（XLSX / CSV）上传后，系统自动识别发票号码、金额、购销方并进入发票台账，同时执行可验证的采购订单关联。需要逐行核对时可关闭自动确认；税务认证仍以实际勾选结果为准。"
         accept=".xlsx,.csv"
         fileHint="支持税务系统导出的 XLSX / CSV，自动识别发票号码、金额、购销方与进销项方向。"
+        allowBatchDelete={false}
+        allowRowDelete={false}
         api={{
           imports: taxInvoiceApi.imports,
           upload: (file, autoConfirm) => taxInvoiceApi.upload(file, undefined, autoConfirm),
@@ -120,7 +122,7 @@ export function TaxInvoicesPanel() {
                 </table>
               </div>
               <div className="mt-2 text-xs text-gray-400">
-                不需要的发票行直接删除，删除后该发票同步从台账隐藏；确认生效前可随时恢复。
+                税务官方清单属于审计底稿，不允许删除批次或单行。识别异常保留原始行并提示核对；源文件有误时请重新导入正确文件纠正。
               </div>
             </div>
           );
@@ -144,7 +146,7 @@ function TaxInvoiceVerifyCard() {
   const load = useCallback(() => {
     const verified = filter === "unverified" ? false : filter === "verified" ? true : undefined;
     taxInvoiceApi
-      .invoices({ direction: "input", verified })
+      .invoices({ direction: "input", status: "issued", verified })
       .then(setRows)
       .catch(() => setRows([]));
   }, [filter]);
@@ -198,8 +200,8 @@ function TaxInvoiceVerifyCard() {
         <div>
           <h3 className="text-sm font-semibold text-gray-800">进项发票认证</h3>
           <p className="mt-0.5 text-xs text-gray-500">
-            进项票在税务系统勾选认证（抵扣）后，回到此处标记所属月份。系统仅作跟踪，
-            不影响实际申报；采购工作台据此判断「待认证」是否走完。
+            仅展示有效（issued）进项票。税务系统勾选认证后回到此处标记所属月份。
+            作废/红字票不进入认证列表，也不计入采购开票进度；系统仅作跟踪，不影响实际申报。
           </p>
         </div>
         <div className="flex items-center gap-1 text-xs">

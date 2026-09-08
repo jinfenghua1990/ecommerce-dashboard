@@ -191,6 +191,9 @@ def _normalize_row(
 def _auto_link(db: Session, invoice: TaxInvoice, related_ref: str, direction: str) -> bool:
     """只按清单明确给出的订单号自动关联，不按金额/名称猜测。"""
     ref = related_ref.strip()
+    amount = invoice.total_amount
+    if (invoice.status or "").lower() in {"void", "red"} or amount is None or amount <= 0:
+        return False
     if not ref:
         return False
     candidates: list[tuple[str, int]] = []
@@ -356,9 +359,31 @@ def _ingest_rows(
         invoice.source_row_index = row_index
         invoice.source_system = "tax_export"
         invoice.raw = raw
-        invoice.match_status = invoice.match_status or "unmatched"
-        if _auto_link(db, invoice, normalized["related_order_ref"], normalized["direction"]):
-            matched += 1
+        invalid_for_business = (
+            normalized["status"] in {"void", "red"}
+            or (normalized["total_amount"] is not None and normalized["total_amount"] <= 0)
+        )
+        if invalid_for_business:
+            for link in db.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).all():
+                link.confirmed = False
+                link.match_method = "invalid_invoice"
+                link.confidence = None
+                link.note = "发票已作废/红冲，不参与业务匹配"
+            invoice.match_status = "unmatched"
+            invoice.match_note = "发票已作废/红冲，不参与业务匹配"
+            invoice.verified = False
+            invoice.verified_month = ""
+            invoice.verified_at = None
+        else:
+            invoice.match_status = invoice.match_status or "unmatched"
+            linked = _auto_link(db, invoice, normalized["related_order_ref"], normalized["direction"])
+            if linked and batch.lifecycle == "active":
+                matched += 1
+            elif linked:
+                for link in db.query(TaxInvoiceLink).filter_by(invoice_id=invoice.id).all():
+                    link.confirmed = False
+                invoice.match_status = "unmatched"
+                invoice.match_note = "草稿发票已识别，确认生效后再进入业务链路"
         record.invoice_id = invoice.id
         recognized += 1
 
