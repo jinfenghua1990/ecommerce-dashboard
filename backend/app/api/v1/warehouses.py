@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from datetime import date
+from decimal import Decimal
+from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -9,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import current_actor
 from app.core.audit import audit
 from app.db import get_db
+from app.services import consumable_purchase_service as purchase_svc
+from app.services import warehouse_receipt_service
 from app.services import warehouse_service as svc
 
 router = APIRouter(prefix="/warehouses", tags=["仓库配置"])
@@ -32,6 +37,19 @@ class WarehouseUpdateBody(BaseModel):
     is_sellable: bool | None = None
     status: str | None = None
     note: str | None = None
+
+
+class WarehouseReceiptItemBody(BaseModel):
+    item_id: int
+    quantity: Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=4)]
+
+
+class WarehouseReceiptBody(BaseModel):
+    request_key: UUID
+    received_on: date
+    warehouse_id: int | None = None
+    note: str = ""
+    items: list[WarehouseReceiptItemBody] = Field(min_length=1, max_length=100)
 
 
 @router.get("")
@@ -79,3 +97,36 @@ def update_row(
         {"fields": sorted(values.keys()), "status": row.status},
     )
     return svc.serialize(row)
+
+
+@router.post("/consumable-purchases/{purchase_id}/receipts")
+def receive_consumable_purchase(
+    purchase_id: int,
+    body: WarehouseReceiptBody,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """新收货入口：按可配置仓库登记，旧 /consumables 收货接口继续兼容历史客户端。"""
+    try:
+        row = warehouse_receipt_service.receive_consumable_purchase(
+            db,
+            purchase_id,
+            request_key=str(body.request_key),
+            received_on=body.received_on,
+            warehouse_id=body.warehouse_id,
+            note=body.note,
+            items=[item.model_dump() for item in body.items],
+            actor=current_actor(request),
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc))
+    audit(
+        db,
+        current_actor(request),
+        "consumable.purchase.receive.warehouse",
+        "consumable_purchases",
+        row.id,
+        {"warehouseId": body.warehouse_id, "requestKey": str(body.request_key)},
+    )
+    return purchase_svc.serialize_purchase(db, row, detail=True)
