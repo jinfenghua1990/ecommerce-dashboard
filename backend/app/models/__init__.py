@@ -18,6 +18,7 @@ from app.models import (
     purchase,
     sales,
     tax,
+    warehouse,
 )
 from app.models.base import Base
 
@@ -42,4 +43,5 @@ __all__ = [
     "profit",
     "finance",
     "ops",
+    "warehouse",
 ]
