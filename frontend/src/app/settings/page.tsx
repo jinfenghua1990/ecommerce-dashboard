@@ -94,18 +94,10 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold">设置 · 数据连接</h1>
+      <h1 className="text-xl font-semibold">系统设置</h1>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-500">
-        凭证只保存在服务器端（.env / 数据库加密），不回传前端。未配置的系统如实显示，不使用模拟数据伪装连接。
+        这里只保留账号安全、数据连接和系统级参数。仓库、生产、货品等业务配置统一回到各自业务页面维护。
       </p>
-
-      <a href="/settings/warehouses" className="mt-6 flex max-w-3xl items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/60 p-4 transition hover:border-indigo-300 hover:bg-indigo-50">
-        <div>
-          <div className="text-sm font-semibold text-slate-800">仓库配置</div>
-          <div className="mt-1 text-xs text-slate-500">默认工厂仓库 + B2C 仓库；可自行新增、改名、调整用途、参与可售或停用。</div>
-        </div>
-        <span className="text-sm font-medium text-indigo-600">进入配置 →</span>
-      </a>
 
       <div className="mt-6 max-w-3xl rounded-xl border border-gray-200 bg-white p-4">
         <div className="text-sm font-medium">账号安全 · 修改密码</div>
