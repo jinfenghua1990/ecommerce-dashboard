@@ -37,6 +37,7 @@ class TaxInvoiceImport(Base, PkMixin, TimestampMixin):
     error_summary: Mapped[str] = mapped_column(Text, default="")
     lifecycle: Mapped[str] = mapped_column(String(16), default="active", index=True)
     lifecycle_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    uploader: Mapped[str] = mapped_column(String(64), default="system")
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

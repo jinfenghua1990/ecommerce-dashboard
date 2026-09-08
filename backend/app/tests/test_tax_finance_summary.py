@@ -142,9 +142,10 @@ def test_official_invoice_star_prefix_can_supply_broad_category(db_session):
 
 def test_user_maintained_rule_can_supply_category_when_official_category_missing(db_session):
     keyword = f"测试咖啡{uuid4().hex[:8]}"
+    # item 必须唯一：迁移已固化用户确认的首条规则（软饮料/咖啡），同 item 会撞唯一约束。
     rule = tax_category_rule_service.create_rule(
         db_session,
-        pattern="*软饮料*咖啡",
+        pattern=f"*软饮料*{keyword}",
         match_keyword=keyword,
         match_mode="contains",
         priority=1,
