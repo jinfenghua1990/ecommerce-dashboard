@@ -27,8 +27,9 @@ from app.models.finance import (
 )
 
 DEFAULT_COMPANY = "浙江柴本网络科技有限公司"
-CATEGORIES = ("bank", "jackyun", "invoice", "other")
-DEFAULT_REQUIRED = {"bank": 1, "invoice": 0, "jackyun": 0, "other": 0}
+CATEGORIES = ("bank", "jackyun", "invoice", "sales_summary", "other")
+# 只用于新建账期；历史账期继续使用自己已保存的 required_types，不追溯改口径。
+DEFAULT_REQUIRED = {"bank": 1, "invoice": 0, "jackyun": 0, "sales_summary": 1, "other": 0}
 
 
 def validate_period(year: int, month: int) -> None:
@@ -231,14 +232,7 @@ def package_period(db: Session, company: str, year: int, month: int,
 
 
 def period_overview(db: Session, company: str | None = None) -> list[dict[str, Any]]:
-    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。
-
-    查询计划（修复 2N+1）：
-    - 1× MonthlyFinancePeriod（按 company 过滤）
-    - 1× ArchiveFile 全表或按 company 过滤
-    - 1× 聚合取文件计数（GROUP BY company/year/month）
-    - 1× FinanceDeliveryPackage JOIN 一次取所有交付包按 company/year/month 分组
-    """
+    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。"""
     periods_q = (
         db.query(MonthlyFinancePeriod)
         if not company
@@ -262,14 +256,11 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
                 "status": "INCOMPLETE", "missing": {}, "requiredTypes": DEFAULT_REQUIRED,
             }
 
-    # 单查询聚合：每个 (company, year, month) 的 ArchiveFile 数量
-    file_count_rows = (
-        db.query(
-            ArchiveFile.company,
-            ArchiveFile.period_year,
-            ArchiveFile.period_month,
-            func.count(ArchiveFile.id),
-        )
+    file_count_rows = db.query(
+        ArchiveFile.company,
+        ArchiveFile.period_year,
+        ArchiveFile.period_month,
+        func.count(ArchiveFile.id),
     )
     if company:
         file_count_rows = file_count_rows.filter(ArchiveFile.company == company)
@@ -279,7 +270,6 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
         ).all()
     }
 
-    # 单查询取所有交付包
     pkg_query = (
         db.query(FinanceDeliveryPackage, MonthlyFinancePeriod.company,
                  MonthlyFinancePeriod.period_year, MonthlyFinancePeriod.period_month)
@@ -308,16 +298,10 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
 def send_delivery(db: Session, company: str, year: int, month: int, *,
                   version: int | None = None, to_addrs: list[str] | None = None,
                   cc_addrs: list[str] | None = None, actor: str = "system") -> dict[str, Any]:
-    """发送财务交付包（规格 10 / 16）。
-
-    - SMTP 未配置 → AdapterNotConfigured（如实失败）
-    - 一个账期+版本只允许一条"首次成功发送"；再次发送标记 RESENT，不伪装成第一次
-    - 成功写 EmailDeliveryLog + audit + 更新 package.status=SENT
-    """
+    """发送财务交付包；首次发送与重发分别留痕。"""
     from app.adapters.mail import MailAdapter
     from app.models.finance import EmailDeliveryLog
 
-    # 先检查 SMTP 配置，未配置如实失败（不进入后续逻辑）
     adapter = MailAdapter()
     adapter.ensure_configured()
 
@@ -325,18 +309,15 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     q = db.query(FinanceDeliveryPackage).filter_by(period_id=period.id)
     if version:
         q = q.filter_by(version=version)
-    # 同一交付包的首次发送串行化，配合数据库唯一约束避免并发重复“首次发送”。
     pkg = q.order_by(FinanceDeliveryPackage.version.desc()).with_for_update().first()
     if not pkg:
         raise ValueError("该账期还没有交付包，请先打包")
 
     zip_path = managed_data_file(pkg.zip_path, label="ZIP 文件")
-
     to_addrs = to_addrs or list((db.get(MonthlyFinancePeriod, period.id).required_types or {}).get("emails", []) or [])
     if not to_addrs:
         raise ValueError("未配置收件人（需在账期 required_types.emails 或发送时传入 to_addrs）")
 
-    # 幂等：首次成功发送只允许一条
     first_sent = (
         db.query(EmailDeliveryLog)
         .filter_by(package_id=pkg.id, kind="first", status="sent")
