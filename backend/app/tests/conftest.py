@@ -10,6 +10,19 @@ TestClient + FastAPI dependency override 模式：用真实 PG（schema 已迁�
 """
 from collections.abc import Generator
 
+import os
+
+# ---- 测试库隔离（必须位于任何 app.* import 之前）----
+# 聚合类测试（财务汇总/月结/税务做账）断言的是全库结果，直连业务库会被真实数据干扰。
+# 设置 TEST_DATABASE_URL 后，pytest 默认连独立测试库；由于所有测试都在事务内 rollback，
+# 该库会永久保持「刚迁移完」的干净状态，与 CI 行为一致。
+# 临时直连业务库：PYTEST_USE_TEST_DB=0 pytest ...
+from dotenv import load_dotenv
+
+load_dotenv()  # 先把 backend/.env 载入 os.environ，否则下面的 getenv 读不到
+if os.getenv("PYTEST_USE_TEST_DB", "1") == "1" and os.getenv("TEST_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select

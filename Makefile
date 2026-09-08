@@ -7,7 +7,7 @@ VENV := $(BACKEND)/.venv
 LAUNCH_LABEL := gui/$(shell id -u)/com.gino.ecommerce-dashboard
 NATIVE_ENV = set -a; . "$(ROOT)/.env"; set +a; export DATABASE_URL="postgresql+psycopg://$$POSTGRES_USER:$$POSTGRES_PASSWORD@localhost:5432/$$POSTGRES_DB"; export REDIS_URL="redis://localhost:6379/0"; export DATA_DIR="$(ROOT)/data";
 
-.PHONY: help up restart status logs logs-api rebuild rebuild-fe test lint tsc verify secret-scan repo-hygiene smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
+.PHONY: help up restart status logs logs-api rebuild rebuild-fe test test-db lint tsc verify secret-scan repo-hygiene smoke migrate migration-check exec-api backup restore-check orphan-audit backup-schedule-install backup-schedule-status backup-schedule-uninstall fresh
 
 help: ## 列出所有 target
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -33,8 +33,16 @@ rebuild-fe: ## 重建静态前端并重启服务
 	cd frontend && npm run build
 	$(MAKE) restart
 
-test: ## 在本机虚拟环境运行后端测试
+test: ## 在本机虚拟环境运行后端测试（默认连测试库，PYTEST_USE_TEST_DB=0 直连业务库）
 	$(NATIVE_ENV) cd "$(BACKEND)" && "$(VENV)/bin/python" -m pytest app/tests -q --tb=line -p no:cacheprovider
+
+test-db: ## 重建并迁移 pytest 专用测试库（<POSTGRES_DB>_test，conftest 默认连它）
+	@set -a; . "$(ROOT)/.env"; set +a; export PGPASSWORD="$${POSTGRES_PASSWORD}"; \
+	psql -h localhost -U "$${POSTGRES_USER}" -d postgres -q -c "DROP DATABASE IF EXISTS $${POSTGRES_DB}_test;" && \
+	psql -h localhost -U "$${POSTGRES_USER}" -d postgres -q -c "CREATE DATABASE $${POSTGRES_DB}_test OWNER $${POSTGRES_USER};" && \
+	psql -h localhost -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}_test" -q -c "ALTER SCHEMA public OWNER TO $${POSTGRES_USER};" && \
+	TEST_URL=$$(cd "$(BACKEND)" && "$(VENV)/bin/python" -c "from dotenv import dotenv_values; print(dotenv_values('.env').get('TEST_DATABASE_URL',''))") && \
+	cd "$(BACKEND)" && DATABASE_URL="$$TEST_URL" "$(VENV)/bin/alembic" upgrade head >/dev/null && echo "测试库 $${POSTGRES_DB}_test 已重建并迁移到 head"
 
 lint: ## 编译检查后端 Python 文件
 	cd "$(BACKEND)" && "$(VENV)/bin/python" -m compileall -q app
