@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.models.alibaba1688_import import Alibaba1688Order
 from app.models.purchase import ExternalPurchaseOrder
 from app.models.tax import TaxInvoice, TaxInvoiceLink
+from app.services.tax_invoice_service import filter_visible_invoices
 
 TOLERANCE = Decimal("0.05")
 
@@ -109,7 +110,7 @@ def reconcile(db: Session, supplier: str | None = None) -> dict[str, Any]:
         .all()
     )
     inv_rows = (
-        db.query(TaxInvoice)
+        filter_visible_invoices(db.query(TaxInvoice))
         .filter(TaxInvoice.direction == "input", TaxInvoice.status == "issued")
         .order_by(TaxInvoice.issue_date.nulls_last(), TaxInvoice.id)
         .all()

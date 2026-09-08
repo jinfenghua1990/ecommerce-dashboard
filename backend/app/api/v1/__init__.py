@@ -18,6 +18,7 @@ from app.api.v1 import (
     procurement_board,
     procurement_chain,
     procurement_workbench,
+    production_purchase_view,
     profit,
     purchase,
     reconciliation,
@@ -53,6 +54,7 @@ api_router.include_router(sales_outbound.router)
 api_router.include_router(profit.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(supply_chain.router)
+api_router.include_router(production_purchase_view.router)
 api_router.include_router(supply_chain_material_flow.router)
 api_router.include_router(supply_chain_finished_flow.router)
 api_router.include_router(opening.router)

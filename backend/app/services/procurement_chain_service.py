@@ -59,9 +59,8 @@ INVOICE_EXTENDED_WINDOW_DAYS = 365
 INVOICE_EXTENDED_CONFIDENCE = Decimal("0.80")
 # 单据/发票早于订单仍能匹配的宽限天数（先款后票的预付场景），倒挂超过该值一律不认。
 PREPAY_GRACE_DAYS = 7
-# 数电发票 status：issued = 有效；red = 已红冲作废（含红字票本身与被红冲的蓝字票）。
-# 作废票一旦参与采购匹配会造成重复/虚假计票，一律排除。
-INVOICE_STATUS_RED = "red"
+# 采购链只把有效的正数票作为可用开票事实；red/void 以及非正金额均不参与匹配/开票进度。
+INVOICE_INVALID_STATUSES = {"red", "void"}
 DOCUMENT_ORDER_REF_FIELDS = (
     "1688订单号", "1688 订单号", "关联单号", "外部业务单号", "原始单号",
     "源订单号", "sourceOrderNo", "externalOrderId", "orderId",
@@ -166,8 +165,23 @@ def auto_confirm_inbound_link(link: ProcurementChainLink) -> bool:
     return changed
 
 
+def invoice_effective_for_procurement(invoice: TaxInvoice) -> bool:
+    """采购链可用发票：仅进项、issued 且价税合计为正数。"""
+    amount = parse_decimal(invoice.total_amount)
+    return (
+        invoice.direction == "input"
+        and (invoice.status or "").lower() == "issued"
+        and amount is not None
+        and amount > 0
+    )
+
+
 def mark_invoice_linked(invoice: TaxInvoice, note: str = "采购链自动关联") -> None:
     """保持发票台账状态与已建立的采购链关联一致。"""
+    if not invoice_effective_for_procurement(invoice):
+        invoice.match_status = "unmatched"
+        invoice.match_note = "作废/红字或非正金额发票不参与采购匹配"
+        return
     invoice.match_status = "matched"
     invoice.match_note = note
 
@@ -242,10 +256,12 @@ class ProcurementChainMatcher:
         covered: dict[int, Decimal] = {order.id: Decimal("0") for order in orders}
         invoice_by_id = {inv.id: inv for inv in invoices}
         for link in self.db.query(TaxInvoiceLink).filter(
-            TaxInvoiceLink.target_type == "alibaba1688_order"
+            TaxInvoiceLink.target_type == "alibaba1688_order",
+            TaxInvoiceLink.confirmed.is_(True),
+            TaxInvoiceLink.match_method.notin_(("rejected", "invalid_invoice")),
         ).all():
             linked = invoice_by_id.get(link.invoice_id)
-            if linked is None:
+            if linked is None or not invoice_effective_for_procurement(linked):
                 continue
             linked_amount = parse_decimal(linked.total_amount) or Decimal("0")
             if linked_amount > 0:
@@ -253,14 +269,14 @@ class ProcurementChainMatcher:
 
         for invoice in invoices:
             amount = parse_decimal(invoice.total_amount)
-            voided = (invoice.status or "").lower() == INVOICE_STATUS_RED
-            if amount is None or amount <= 0 or voided:
-                # 红字（负数）票是冲销凭证；status=red 的蓝字票已被红冲作废。
-                # 两者都不对应真实采购，参与匹配会造成重复/虚假计票。
-                if voided and amount is not None and amount > 0:
+            status = (invoice.status or "").lower()
+            if not invoice_effective_for_procurement(invoice):
+                if status == "void":
                     voided_invoices += 1
-                else:
+                elif status == "red" or (amount is not None and amount < 0):
                     red_invoices += 1
+                else:
+                    skipped += 1
                 continue
             match = self._best_order(orders, invoice.seller_name, amount, invoice.issue_date)
             if match is None:
@@ -408,9 +424,10 @@ class ProcurementChainMatcher:
         return {"linked": True, "settlementNo": best.settlement_no}
 
     def _existing_invoice_link(self, order_id: int, invoice_id: int) -> bool:
-        return self.db.query(TaxInvoiceLink).filter_by(
+        link = self.db.query(TaxInvoiceLink).filter_by(
             target_type="alibaba1688_order", target_id=order_id, invoice_id=invoice_id
-        ).first() is not None
+        ).first()
+        return link is not None and link.match_method != "invalid_invoice"
 
     def _upsert_link(self, order_id: int, target_type: str, target_id: int,
                      confidence: Decimal, auto_confirm: bool, note: str) -> ProcurementChainLink:
@@ -441,6 +458,11 @@ class ProcurementChainMatcher:
                 match_method="auto", confidence=confidence, confirmed=auto_confirm, note=note,
             )
             self.db.add(link)
+        elif link.match_method == "invalid_invoice":
+            link.match_method = "auto"
+            link.confidence = confidence
+            link.confirmed = auto_confirm
+            link.note = note
         elif auto_confirm and link.match_method != "rejected":
             link.confirmed = True
         if auto_confirm and link.match_method != "rejected":
@@ -541,8 +563,8 @@ class ProcurementChainMatcher:
         if source is None and external is None:
             raise ValueError("采购订单不存在或已删除")
         invoice = _invoice_of(self.db, None, invoice_id)
-        if invoice is None or invoice.direction != "input":
-            raise ValueError("请选择有效的进项发票")
+        if invoice is None or invoice.direction != "input" or not invoice_effective_for_procurement(invoice):
+            raise ValueError("请选择有效、未作废且金额为正的进项发票")
         target_type = "alibaba1688_order" if source else "external_purchase_order"
         target_id = source.id if source else external.id
         link = self.db.query(TaxInvoiceLink).filter_by(
@@ -583,10 +605,11 @@ class ProcurementChainMatcher:
         link = self.db.get(TaxInvoiceLink, link_id)
         if link is None:
             raise ValueError("关联不存在")
-        link.confirmed = True
         invoice = self.db.get(TaxInvoice, link.invoice_id)
-        if invoice is not None:
-            mark_invoice_linked(invoice, link.note or "采购链自动关联")
+        if invoice is None or invoice.direction != "input" or not invoice_effective_for_procurement(invoice):
+            raise ValueError("作废/红字或非正金额发票不能确认到采购链")
+        link.confirmed = True
+        mark_invoice_linked(invoice, link.note or "采购链自动关联")
         self.db.commit()
         return link
 
@@ -624,6 +647,10 @@ class ProcurementChainMatcher:
         invoice = self.db.get(TaxInvoice, invoice_id)
         if invoice is None:
             raise ValueError("发票不存在")
+        if verified and invoice.direction != "input":
+            raise ValueError("只有有效进项发票可以标记认证")
+        if verified and not invoice_effective_for_procurement(invoice):
+            raise ValueError("作废/红字或非正金额发票不能标记认证")
         if verified and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", verified_month):
             raise ValueError("请填写实际认证所属月份，格式 YYYY-MM")
         invoice.verified = verified
@@ -644,9 +671,9 @@ def auto_confirm_pending_links(db: Session, actor: str = "system") -> dict:
     ).all()
     invoice_links = db.query(TaxInvoiceLink).filter(
         TaxInvoiceLink.target_type.in_(
-            ("alibaba1688_order", "external_purchase_order")
+            ("alibaba1688_order", "external_purchase_order", "jackyun_purchase_order")
         ),
-        TaxInvoiceLink.match_method != "rejected",
+        TaxInvoiceLink.match_method.notin_(("rejected", "invalid_invoice")),
     ).all()
 
     confirmed_chain = 0
@@ -710,6 +737,37 @@ def auto_confirm_pending_links(db: Session, actor: str = "system") -> dict:
         if invoice is None:
             skipped_orphans += 1
             continue
+        if invoice.source_import_id is not None:
+            invoice_import = db.get(TaxInvoiceImport, invoice.source_import_id)
+            if invoice_import is not None and invoice_import.lifecycle != "active":
+                skipped_orphans += 1
+                continue
+        if not invoice_effective_for_procurement(invoice):
+            link.confirmed = False
+            link.match_method = "invalid_invoice"
+            link.confidence = None
+            link.note = "发票已作废/红冲或金额非正，自动解除采购关联"
+            invoice.match_status = "unmatched"
+            invoice.match_note = "作废/红字或非正金额发票不参与采购匹配"
+            skipped_orphans += 1
+            continue
+        if link.target_type == "jackyun_purchase_order":
+            jpo = db.get(JackyunPurchaseOrder, link.target_id)
+            if jpo is None:
+                skipped_orphans += 1
+                continue
+            po_ids = sorted({
+                int(row.po_id)
+                for row in db.query(JackyunPurchaseOrderLink).filter_by(jackyun_po_id=jpo.id).all()
+            })
+            if len(po_ids) != 1:
+                link.confirmed = False
+                link.note = "吉客云采购单未唯一关联来源采购主单，待人工核对"
+                skipped_orphans += 1
+                continue
+            link.target_type = "external_purchase_order"
+            link.target_id = po_ids[0]
+
         if link.target_type == "alibaba1688_order":
             source = db.get(Alibaba1688Order, link.target_id)
             if source is None or source.row_status == "deleted":
@@ -767,7 +825,7 @@ def auto_confirm_pending_links(db: Session, actor: str = "system") -> dict:
 
 
 def purge_voided_invoice_links(db: Session, actor: str = "system", dry_run: bool = True) -> dict:
-    """清理建立在作废发票上的采购关联（status=red 或红字负数票）。
+    """清理建立在作废/红冲/非正金额发票上的采购关联。
 
     早期版本没有过滤作废票，历史库里可能残留这类关联：已红冲的蓝字票被计进
     采购金额，会造成票面金额虚高。默认 dry_run，确认清单后再实际删除。
@@ -776,8 +834,8 @@ def purge_voided_invoice_links(db: Session, actor: str = "system", dry_run: bool
         db.query(TaxInvoiceLink)
         .join(TaxInvoice, TaxInvoice.id == TaxInvoiceLink.invoice_id)
         .filter(
-            TaxInvoiceLink.target_type == "alibaba1688_order",
-            or_(TaxInvoice.status == INVOICE_STATUS_RED, TaxInvoice.total_amount <= 0),
+            TaxInvoiceLink.target_type.in_(("alibaba1688_order", "external_purchase_order", "jackyun_purchase_order")),
+            or_(TaxInvoice.status.in_(INVOICE_INVALID_STATUSES), TaxInvoice.total_amount <= 0),
         )
         .all()
     )
@@ -1223,7 +1281,7 @@ def _chain_links_of(db: Session, pf: ChainPrefetch | None, order_id: int,
         rows = db.query(ProcurementChainLink).filter_by(**identity).all()
     if target_type is not None:
         rows = [r for r in rows if r.target_type == target_type]
-    rows = [r for r in rows if r.match_method != "rejected"]
+    rows = [r for r in rows if r.match_method not in ("rejected", "invalid_invoice")]
     if confirmed is not None:
         rows = [r for r in rows if r.confirmed == confirmed]
     return rows
@@ -1235,7 +1293,7 @@ def _invoice_links_of(db: Session, pf: ChainPrefetch | None, target_type: str, t
         rows = pf.invoice_links.get((target_type, target_id), [])
     else:
         rows = db.query(TaxInvoiceLink).filter_by(target_type=target_type, target_id=target_id).all()
-    rows = [r for r in rows if r.match_method != "rejected"]
+    rows = [r for r in rows if r.match_method not in ("rejected", "invalid_invoice")]
     if confirmed is not None:
         rows = [r for r in rows if r.confirmed == confirmed]
     return rows
@@ -1569,13 +1627,16 @@ def _order_row(
     invoice_info: list[dict] = []
     verified = False
     seen_invoice_ids: set[int] = set()
-    # 已收票金额：优先用关联的分摊额（一票挂多单场景），未分摊才用票面全额。
+    tax_numbers: set[str] = set()
     invoiced_amount = Decimal("0")
     for link in invoice_links:
         inv = _invoice_of(db, pf, link.invoice_id)
         if inv is None or inv.id in seen_invoice_ids:
             continue
         seen_invoice_ids.add(inv.id)
+        tax_numbers.add(_invoice_no(inv))
+        if not invoice_effective_for_procurement(inv):
+            continue
         if inv.verified:
             verified = True
         share = link.allocated_amount if link.allocated_amount is not None else inv.total_amount
@@ -1588,13 +1649,18 @@ def _order_row(
             "confirmed": True,
         })
 
+    official_invalid_numbers: set[str] = set()
+    visible_official = pf.invoices.values() if pf is not None else filter_visible_invoices(db.query(TaxInvoice)).all()
+    for official in visible_official:
+        if not invoice_effective_for_procurement(official):
+            official_invalid_numbers.update(filter(None, (official.invoice_number or "", _invoice_no(official))))
+
     if external is not None:
-        tax_numbers = {str(inv.get("invoiceNo")) for inv in invoice_info}
         for link, inv in db.query(PurchaseInvoiceLink, PurchaseInvoice).join(
             PurchaseInvoice, PurchaseInvoice.id == PurchaseInvoiceLink.invoice_id
         ).filter(PurchaseInvoiceLink.po_id == external.id).all():
-            if inv.invoice_no and inv.invoice_no in tax_numbers:
-                continue  # 税务原始清单优先，避免登记副本重复计票。
+            if inv.invoice_no and (inv.invoice_no in tax_numbers or inv.invoice_no in official_invalid_numbers):
+                continue  # 税务官方清单优先；作废官方票也不能被手工副本重新计入。
             invoice_info.append({"invoiceId": inv.id, "linkId": link.id, "invoiceKind": "manual",
                                  "invoiceNo": inv.invoice_no, "amount": _num(link.allocated_amount),
                                  "issueDate": inv.invoice_date.isoformat() if inv.invoice_date else None,

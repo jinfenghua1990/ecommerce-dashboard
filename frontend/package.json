@@ -6,7 +6,9 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:routes": "node scripts/check-navigation-routes.mjs",
+    "check:interactions": "node scripts/check-interactions.mjs"
   },
   "dependencies": {
     "next": "16.3.4",

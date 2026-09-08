@@ -1,5 +1,62 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: light;
+}
+
+html,
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  background: #f4f7fb;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/*
+ * V1.6.1 统一业务工作区：
+ * - 主区永远占满侧栏之外的浏览器剩余宽度；
+ * - 业务页顶层历史 max-width 不再限制大屏展示；
+ * - 宽表格只允许在自己的 overflow-x-auto 容器内滚动。
+ */
+[data-app-main] {
+  width: 0;
+  min-width: 0;
+}
+
+.app-route-content {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-route-content > * {
+  width: 100%;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.app-route-content [class*="overflow-x-auto"] {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+
+.app-route-content table {
+  max-width: none;
+}
+
+::selection {
+  background: #dbeafe;
+  color: #17335f;
 }
