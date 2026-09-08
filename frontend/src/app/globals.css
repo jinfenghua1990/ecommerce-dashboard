@@ -56,28 +56,6 @@ body {
   max-width: none;
 }
 
-/*
- * 采购工作台历史上自带 WorkbenchSidebar。
- * V1.6.1 已由 AuthShell 提供统一深色侧栏，因此仅隐藏采购页内部旧侧栏，
- * 保留其订单 / 供应商 / 链路 / 匹配等业务视图和移动端下拉导航。
- */
-main[data-purchase-workbench="true"] .app-route-content > div > div > aside:first-child {
-  display: none !important;
-}
-
-main[data-purchase-workbench="true"] .app-route-content > div,
-main[data-purchase-workbench="true"] .app-route-content > div > div,
-main[data-purchase-workbench="true"] .app-route-content > div > div > main {
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-}
-
-main[data-purchase-workbench="true"] .app-route-content > div {
-  min-height: 100%;
-  background: #f4f7fb;
-}
-
 ::selection {
   background: #dbeafe;
   color: #17335f;

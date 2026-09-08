@@ -10,8 +10,8 @@ import { workbenchHref } from "@/lib/workbench-navigation";
  * 路由守卫：除 /login 外，先向服务端校验令牌，再渲染业务页面。
  *
  * V1.6.1 统一使用同一套全局侧栏 + 动态主内容区。
- * 采购工作台仍保留自己的业务视图组件，但旧 WorkbenchSidebar 由全局样式隐藏，
- * 避免出现“双侧栏 / 套工作台”的嵌套体验。
+ * 采购工作台只保留采购域业务视图；历史 WorkbenchSidebar 源码已删除，
+ * 不再存在“双侧栏 / 套工作台”的第二套视觉外壳。
  */
 export default function AuthShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

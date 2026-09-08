@@ -14,13 +14,10 @@ import {
   authenticatedFetch,
   consumablesApi,
   dashboardApi,
-  fetchMe,
-  logout,
   procurementBoardApi,
   procurementChainApi,
   procurementWorkbenchApi,
   skuMatchingApi,
-  type AuthUser,
   type BoardOverview,
   type CatalogSkuRow,
   type ConsumableMappingRow,
@@ -382,7 +379,6 @@ export default function PurchaseWorkbenchPage() {
   const [newOrderOpen, setNewOrderOpen] = useState(false);
   const [page, setPage] = useState(1);
   const pageSize = 20;
-  const [user, setUser] = useState<AuthUser | null>(null);
   const [summary, setSummary] = useState<WorkbenchSummary | null>(null);
   const [orders, setOrders] = useState<WorkbenchOrderItem[]>([]);
   const [outstandingTotal, setOutstandingTotal] = useState(0);
@@ -632,7 +628,6 @@ export default function PurchaseWorkbenchPage() {
   }
 
   useEffect(() => {
-    fetchMe().then(setUser).catch(() => setUser(null));
     void loadSummary();
     void loadBoard();
     void loadFunnelTodos();
@@ -794,10 +789,8 @@ export default function PurchaseWorkbenchPage() {
   }, [supplierQuery, suppliers]);
 
   return (
-    <div className="min-h-screen bg-[#f7f8fc] text-[#26324b]">
-      <div className="flex min-h-screen">
-        <WorkbenchSidebar user={user} view={view} onViewChange={changeView} />
-        <main className="min-w-0 flex-1 px-5 pb-8 pt-5 sm:px-6 2xl:px-7">
+    <div className="min-w-0 bg-[#f7f8fc] text-[#26324b]">
+      <main className="min-w-0 px-5 pb-8 pt-5 sm:px-6 2xl:px-7">
           <select aria-label="工作台功能导航" className="mb-3 w-full rounded-lg border border-slate-200 bg-white p-2 lg:hidden" value={view} onChange={event => changeView(event.target.value as ViewMode)}>
             {Object.entries(WORKBENCH_VIEWS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
@@ -937,8 +930,7 @@ export default function PurchaseWorkbenchPage() {
               />
             </div>
           ) : <WorkspaceModule key={view} view={view} />}
-        </main>
-      </div>
+      </main>
       {newOrderOpen && <NewPurchaseModal onClose={() => { setNewOrderOpen(false); const url = new URL(window.location.href); url.searchParams.delete("action"); window.history.replaceState(null, "", url.pathname + url.search); }} onCreated={(orderId) => {
         setNewOrderOpen(false);
         setStatusFilter("all"); setQuery(""); setSearchDraft(""); setStartDate(""); setEndDate(""); setPage(1);
@@ -950,119 +942,6 @@ export default function PurchaseWorkbenchPage() {
   );
 }
 
-function WorkbenchSidebar({ user, view, onViewChange }: {
-  user: AuthUser | null;
-  view: ViewMode;
-  onViewChange: (view: ViewMode) => void;
-}) {
-  const primary = [
-    { href: "/", label: "经营总览", icon: "dashboard" as IconName },
-    { href: "/sales", label: "销售", icon: "sales" as IconName, phase: "P2" },
-    { href: "/products", label: "商品与库存", icon: "box" as IconName, phase: "P2" },
-  ];
-  const secondary = [
-    { href: "/procurement-ledger", label: "采购链路", icon: "reconcile" as IconName },
-    { href: "/payments", label: "回款与对账", icon: "wallet" as IconName },
-    { href: "/finance", label: "财务资料", icon: "receipt" as IconName },
-    { href: "/data-center-import", label: "数据接入", icon: "import" as IconName, phase: "P1" },
-    { href: "/profit", label: "数据报表", icon: "chart" as IconName, phase: "P3" },
-    { href: "/exceptions", label: "异常中心", icon: "reconcile" as IconName },
-    { href: "/automation", label: "自动化", icon: "sync" as IconName },
-    { href: "/settings", label: "系统设置", icon: "settings" as IconName, phase: "P3" },
-  ];
-  return (
-    <aside className="sticky top-0 hidden h-screen w-[220px] shrink-0 flex-col border-r border-slate-200/80 bg-white lg:flex">
-      <div className="flex h-[68px] items-center gap-2.5 px-5">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
-          <span className="h-2.5 w-2.5 rounded-[3px] border-2 border-white" />
-        </span>
-        <span className="text-[16px] font-semibold tracking-tight text-slate-900">电商经营数据平台</span>
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-500">V1.0</span>
-      </div>
-      <nav className="flex-1 overflow-y-auto px-2.5 pb-4">
-        <div className="space-y-1">
-          {primary.map((item) => <SidebarLink key={item.href} {...item} />)}
-          <div className="ml-[22px] space-y-0.5 border-l border-slate-100 pl-2">
-            <button
-              onClick={() => onViewChange("products")}
-              className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "products" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-            >
-              <Icon name="box" size={14} />货品档案
-            </button>
-            <button
-              onClick={() => onViewChange("inventory_goods")}
-              className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "inventory_goods" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-            >
-              <Icon name="box" size={14} />库存-正品
-            </button>
-            <button
-              onClick={() => onViewChange("inventory_consumables")}
-              className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "inventory_consumables" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-            >
-              <Icon name="box" size={14} />库存-耗材
-            </button>
-          </div>
-          <button
-            onClick={() => onViewChange("orders")}
-            className="flex w-full items-center gap-3 rounded-lg bg-indigo-50 px-3 py-2.5 text-left text-[13px] font-semibold text-indigo-600"
-          >
-            <Icon name="purchase" />
-            <span className="flex-1">采购工作台</span>
-            <span className="rounded bg-white px-1.5 py-0.5 text-[9px] font-medium text-indigo-500">P1</span>
-          </button>
-        </div>
-        <div className="ml-[22px] mt-1 space-y-0.5 border-l border-slate-100 pl-2">
-          <button
-            onClick={() => onViewChange("orders")}
-            className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "orders" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-          >
-            <Icon name="orders" size={14} />订单视图
-          </button>
-          <button
-            onClick={() => onViewChange("suppliers")}
-            className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "suppliers" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-          >
-            <Icon name="users" size={14} />供应商管理
-          </button>
-          <button
-            onClick={() => onViewChange("matching")}
-            className={cx("flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px]", view === "matching" ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-50")}
-          >
-            <Icon name="box" size={14} />SKU 匹配
-          </button>
-        </div>
-        <div className="mt-1 space-y-0.5">
-          {secondary.map((item) => <SidebarLink key={item.href} {...item} />)}
-        </div>
-      </nav>
-      <div className="border-t border-slate-100 px-4 py-4">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-xs font-semibold text-white">
-            {(user?.displayName || user?.username || "管").slice(0, 1)}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[12px] font-medium text-slate-700">{user?.displayName || "管理员"}</div>
-            <div className="truncate text-[10px] text-slate-400">{user?.username || "admin"}</div>
-          </div>
-          {process.env.NEXT_PUBLIC_ACCESS_MODE !== "open" && <button onClick={() => void logout().finally(() => window.location.assign("/login"))} className="text-xs text-slate-500 hover:text-indigo-600">退出</button>}
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function SidebarLink({ href, label, icon, phase }: { href: string; label: string; icon: IconName; phase?: string }) {
-  const params = useSearchParams();
-  const destination = workbenchHref(href);
-  const target = new URLSearchParams(destination.split("?")[1]);
-  const active = params.get("view") === target.get("view") && (!target.has("tab") || params.get("tab") === target.get("tab"));
-  return (
-    <Link href={destination} className={cx("flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] transition-colors hover:bg-slate-50", active ? "bg-indigo-50 text-indigo-600" : "text-slate-600")}>
-      <Icon name={icon} /><span className="flex-1">{label}</span>
-      {phase && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">{phase}</span>}
-    </Link>
-  );
-}
 
 function WorkbenchHeader({ view, busyAction, onViewChange, onNewOrder, onMatch, onRefresh, onExport }: {
   view: ViewMode;
