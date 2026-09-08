@@ -1,49 +1,32 @@
-type PurchaseWorkbenchView = "orders" | "suppliers" | "chain" | "matching" | "tax";
-
-// 仅为兼容正式采购页中尚待清理的旧侧栏死代码类型；这些值不会进入新版菜单、URL 解析或运行时视图。
-type LegacyWorkbenchView =
-  | "imports"
-  | "dashboard"
-  | "sales"
-  | "products"
-  | "inventory_goods"
-  | "inventory_consumables"
-  | "payments"
-  | "profit"
-  | "finance"
-  | "exceptions"
-  | "automation"
-  | "settings";
-
-export type WorkbenchView = PurchaseWorkbenchView | LegacyWorkbenchView;
-
-export const WORKBENCH_VIEWS: Partial<Record<WorkbenchView, string>> = {
+export const WORKBENCH_VIEWS = {
   orders: "采购订单",
   suppliers: "供应商管理",
   chain: "采购链路",
   matching: "SKU 匹配",
   tax: "发票对账",
-};
+} as const;
 
-const ACTIVE_WORKBENCH_VIEWS = new Set<PurchaseWorkbenchView>(["orders", "suppliers", "chain", "matching", "tax"]);
+export type WorkbenchView = keyof typeof WORKBENCH_VIEWS;
 
-export function parseWorkbenchView(value: string | null): PurchaseWorkbenchView {
-  // V1.6.1：运行时只允许采购域内部 5 个视图。
+const ACTIVE_WORKBENCH_VIEWS = new Set<WorkbenchView>(Object.keys(WORKBENCH_VIEWS) as WorkbenchView[]);
+
+export function parseWorkbenchView(value: string | null): WorkbenchView {
+  // V1.6.1：采购工作台源码与运行时都只允许采购域内部 5 个视图。
   // 历史 view=sales/products/finance/... 不再嵌套正式业务页面，统一回到采购订单。
-  return value && ACTIVE_WORKBENCH_VIEWS.has(value as PurchaseWorkbenchView)
-    ? (value as PurchaseWorkbenchView)
+  return value && ACTIVE_WORKBENCH_VIEWS.has(value as WorkbenchView)
+    ? (value as WorkbenchView)
     : "orders";
 }
 
 /**
- * 仅兼容已经废弃的旧采购入口。
+ * 仅兼容已经废弃的旧采购 URL。
  * 正式业务页面（/、/sales、/products、/finance、/settings 等）必须保持独立路由，
  * 不允许再被统一重定向进 /purchase/workbench?view=…。
  *
  * 注意：侧栏正式入口会由 frontend/scripts/check-navigation-routes.mjs 在 CI 自动校验，
  * 后续新增菜单时如果目标页面不存在或又被加入这里，CI 会直接失败。
  */
-const LEGACY_PURCHASE_VIEWS: Record<string, PurchaseWorkbenchView> = {
+const LEGACY_PURCHASE_VIEWS: Record<string, WorkbenchView> = {
   "/purchase": "orders",
   "/procurement-workbench": "orders",
   "/procurement-board": "orders",
@@ -53,7 +36,7 @@ const LEGACY_PURCHASE_VIEWS: Record<string, PurchaseWorkbenchView> = {
   "/purchase/workbench-v2": "orders",
 };
 
-/** 旧采购地址保留查询条件与订单上下文，统一进入正式采购工作台。 */
+/** 旧采购地址保留查询条件与订单上下文，统一进入 V1.6.1 新采购工作台。 */
 export function workbenchHref(href: string): string {
   const [pathname, search = ""] = href.split("?");
   const view = LEGACY_PURCHASE_VIEWS[pathname];
