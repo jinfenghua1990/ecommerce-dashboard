@@ -33,6 +33,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/supply-chain/production", label: "生产订单", nested: true },
       { href: "/supply-chain/material-flow", label: "耗材流转", nested: true },
       { href: "/purchase/workbench", label: "采购订单", nested: true },
+      { href: "/purchase/merge", label: "采购合并", nested: true },
       { href: "/supply-chain/in-transit", label: "生产 / 在途", nested: true },
       { href: "/supply-chain/receiving", label: "到货入库", nested: true },
       { href: "/supply-chain/warehouses", label: "仓库", nested: true },
