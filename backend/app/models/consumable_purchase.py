@@ -53,7 +53,8 @@ class ConsumableReceipt(Base, PkMixin, TimestampMixin):
     request_key: Mapped[str] = mapped_column(String(36), unique=True)
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     received_on: Mapped[date] = mapped_column(Date)
-    # 到货位置：own=自有仓 / factory=工厂（耗材不进吉客云，收货直接加本平台对应库存）
+    # 新逻辑以 warehouse_id 为准；location 仅保留兼容旧 own/factory 流水，后续不再作为配置主键。
+    warehouse_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("warehouses.id"), nullable=True, index=True)
     location: Mapped[str] = mapped_column(String(16), default="own", server_default="own")
     note: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(128), default="")
