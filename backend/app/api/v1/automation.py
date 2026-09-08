@@ -11,7 +11,6 @@ from app.models.integration import SyncJob, SyncLog
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 
-# 与 celery_app.beat_schedule 对应的说明表；订单频率跟随服务端配置。
 _order_interval = max(1, min(settings.JKY_ORDER_SYNC_INTERVAL_MINUTES, 59))
 _order_frequency = (
     "已暂停（JACKYUN_SYNC_MODE=manual）"
@@ -35,6 +34,7 @@ SCHEDULE = [
     {"task": "tasks.sync_jackyun", "args": "outbound", "label": "吉客云 出库单", "frequency": "每天 03:50"},
     {"task": "tasks.sync_1688", "args": "", "label": "1688 订单", "frequency": "每天 07:30"},
     {"task": "tasks.monthly_verify", "args": "", "label": "月初完整校验", "frequency": "每月 1 日 06:00"},
+    {"task": "tasks.generate_monthly_accounting_summary", "args": "", "label": "财务 销售开票分类汇总", "frequency": "每月 2 日 04:10"},
 ]
 
 JACKYUN_JOB_TYPES = {
@@ -57,7 +57,6 @@ def run_jackyun(job_type: str, request: Request, db: Session = Depends(get_db)) 
 
     from app.tasks.sync import sync_jackyun
 
-    # 人工“立即同步”可在客户经理开通权限后绕过自动暂停，得到一次真实验证结果。
     task = sync_jackyun.delay(job_type, True)
     audit(db, current_actor(request), "automation.jackyun.queued", "celery_task", task.id,
           {"jobType": job_type})
@@ -75,8 +74,10 @@ def run_1688(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.get("/schedule")
 def schedule() -> dict[str, Any]:
-    """只读展示 beat schedule 和当前订单同步调度档位。"""
-    return {"items": SCHEDULE, "note": "所有外部同步仅在凭证配置后真正执行；未配置如实跳过。吉客云业务权限被明确拒绝后，定时任务会暂停，待开通后请手动立即同步验证。"}
+    return {
+        "items": SCHEDULE,
+        "note": "财务月度主表按官方开票的财务大类+税率汇总；底层商品/SKU明细仅保留在系统内，不作为默认财务发送主表。",
+    }
 
 
 @router.get("/jobs")

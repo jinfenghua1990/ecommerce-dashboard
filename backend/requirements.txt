@@ -8,6 +8,7 @@ pydantic-settings>=2.6
 celery>=5.4
 redis>=5.2
 httpx>=0.28
+requests>=2.32
 cryptography>=43
 python-multipart>=0.0.12
 openpyxl>=3.1

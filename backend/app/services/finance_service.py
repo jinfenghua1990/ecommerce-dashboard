@@ -3,7 +3,8 @@
 - 原始文件只读、同名不覆盖（version 递增）
 - 缺资料禁止打包（INCOMPLETE → 异常）
 - 已生成的 ZIP 版本不可覆盖；已发送 V1 不受后续影响
-- SMTP 发送在 Phase 6 配置后开放
+- 财务销售主表必须包含官方开票“财务大类 + 税率”汇总
+- 吉客云逐条销售出库 CSV 仅保留内部核对，不进入默认财务交付包
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from app.models.finance import (
 
 DEFAULT_COMPANY = "浙江柴本网络科技有限公司"
 CATEGORIES = ("bank", "jackyun", "invoice", "other")
-DEFAULT_REQUIRED = {"bank": 1, "invoice": 0, "jackyun": 0, "other": 0}
+DEFAULT_REQUIRED = {"bank": 1, "invoice": 1, "jackyun": 0, "other": 0}
 
 
 def validate_period(year: int, month: int) -> None:
@@ -57,6 +58,16 @@ def _write_new_file(target: Path, content: bytes) -> None:
         output.write(content)
 
 
+def _required_policy(current: dict | None) -> dict:
+    """保留账期自定义配置，但销售开票分类汇总固定为必备资料。"""
+    required = dict(current or DEFAULT_REQUIRED)
+    required.setdefault("bank", 1)
+    required["invoice"] = max(1, int(required.get("invoice", 0) or 0))
+    required.setdefault("jackyun", 0)
+    required.setdefault("other", 0)
+    return required
+
+
 def get_or_create_period(db: Session, company: str, year: int, month: int) -> MonthlyFinancePeriod:
     validate_period(year, month)
     row = (
@@ -71,6 +82,11 @@ def get_or_create_period(db: Session, company: str, year: int, month: int) -> Mo
         )
         db.add(row)
         db.commit()
+    elif row.status != "SENT":
+        required = _required_policy(row.required_types)
+        if required != (row.required_types or {}):
+            row.required_types = required
+            db.commit()
     return row
 
 
@@ -90,7 +106,9 @@ def evaluate_completeness(files: list[ArchiveFile], required: dict[str, int]) ->
     for f in files:
         counts[f.category] = counts.get(f.category, 0) + 1
     missing = {}
-    for cat, need in (required or {}).items():
+    for cat, need in _required_policy(required).items():
+        if cat == "emails":
+            continue
         lack = int(need) - counts.get(cat, 0)
         if lack > 0:
             missing[cat] = lack
@@ -101,7 +119,7 @@ def refresh_period_status(db: Session, company: str, year: int, month: int) -> M
     period = get_or_create_period(db, company, year, month)
     files = db.query(ArchiveFile).filter_by(company=company, period_year=year, period_month=month).all()
     status, summary = evaluate_completeness(files, period.required_types or DEFAULT_REQUIRED)
-    if period.status != "SENT":  # 已发送状态不被自动覆盖
+    if period.status != "SENT":
         period.status = status
     period.missing_summary = summary
     db.commit()
@@ -141,7 +159,6 @@ def store_upload(
             _write_new_file(target, content)
             break
         except FileExistsError:
-            # 另一个并发上传可能刚写入相同版本；保留原件并尝试下一个版本。
             version += 1
 
     try:
@@ -156,7 +173,6 @@ def store_upload(
         db.commit()
     except Exception:
         db.rollback()
-        # 仅删除本次用排他方式创建的文件；绝不碰已有版本。
         target.unlink(missing_ok=True)
         raise
     audit(db, actor, "finance.file.upload", "archive_files", row.id,
@@ -165,9 +181,14 @@ def store_upload(
     return row
 
 
+def _is_internal_sales_detail(file: ArchiveFile) -> bool:
+    """历史吉客云逐条销售出库报表只用于系统内部追溯，不进入默认财务邮件包。"""
+    return file.category == "jackyun" and (file.original_name or "").startswith("销售出库_")
+
+
 def package_period(db: Session, company: str, year: int, month: int,
                    actor: str = "system") -> FinanceDeliveryPackage:
-    """资料齐全才可打包；每次打包生成新版本号，ZIP 落 output/V{n}，绝不覆盖。"""
+    """资料齐全才可打包；财务包排除内部逐条销售出库明细。"""
     validate_period(year, month)
     period = get_or_create_period(db, company, year, month)
     files = db.query(ArchiveFile).filter_by(company=company, period_year=year, period_month=month).all()
@@ -175,10 +196,18 @@ def package_period(db: Session, company: str, year: int, month: int,
     if status != "READY" or not files:
         raise ValueError(f"资料不完整，禁止打包，缺少: {summary['missing']}")
 
-    # 归档表的 stored_path 也属于不可信持久化数据：打包前再次做目录边界校验。
+    delivery_files = [f for f in files if not _is_internal_sales_detail(f)]
+    if not delivery_files:
+        raise ValueError("没有可发送的财务资料")
+    if not any(
+        f.category == "invoice" and (f.original_name or "").startswith("销售开票分类汇总_")
+        for f in delivery_files
+    ):
+        raise ValueError("缺少销售开票分类汇总，禁止生成财务交付包")
+
     source_files = [
         (f, managed_data_file(f.stored_path, label="原始归档文件"))
-        for f in files
+        for f in delivery_files
     ]
 
     prev = (
@@ -204,7 +233,7 @@ def package_period(db: Session, company: str, year: int, month: int,
         zip_path = candidate
         created_zip = True
         with archive as zf:
-            for f, source_path in source_files:  # 原样打包，不做二次加工
+            for f, source_path in source_files:
                 zf.write(source_path, arcname=f"{f.category}/{source_path.name}")
         break
 
@@ -216,7 +245,7 @@ def package_period(db: Session, company: str, year: int, month: int,
         )
         db.add(pkg)
         db.flush()
-        for f in files:
+        for f in delivery_files:
             db.add(FinanceDeliveryFile(package_id=pkg.id, archive_file_id=f.id))
         period.status = "PACKAGED"
         db.commit()
@@ -226,19 +255,13 @@ def package_period(db: Session, company: str, year: int, month: int,
             zip_path.unlink(missing_ok=True)
         raise
     audit(db, actor, "finance.package.create", "finance_delivery_packages", pkg.id,
-          {"version": version, "files": len(files), "sha256": pkg.zip_sha256[:16]})
+          {"version": version, "files": len(delivery_files), "sha256": pkg.zip_sha256[:16],
+           "excludedInternalSalesDetails": len(files) - len(delivery_files)})
     return pkg
 
 
 def period_overview(db: Session, company: str | None = None) -> list[dict[str, Any]]:
-    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。
-
-    查询计划（修复 2N+1）：
-    - 1× MonthlyFinancePeriod（按 company 过滤）
-    - 1× ArchiveFile 全表或按 company 过滤
-    - 1× 聚合取文件计数（GROUP BY company/year/month）
-    - 1× FinanceDeliveryPackage JOIN 一次取所有交付包按 company/year/month 分组
-    """
+    """列出所有账期（来自归档文件与账期表的并集）及状态/交付包。"""
     periods_q = (
         db.query(MonthlyFinancePeriod)
         if not company
@@ -249,7 +272,7 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
         periods[(row.company, row.period_year, row.period_month)] = {
             "company": row.company, "year": row.period_year, "month": row.period_month,
             "status": row.status, "missing": (row.missing_summary or {}).get("missing", {}),
-            "requiredTypes": row.required_types or DEFAULT_REQUIRED,
+            "requiredTypes": _required_policy(row.required_types),
         }
     archive_q = db.query(ArchiveFile)
     if company:
@@ -262,14 +285,11 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
                 "status": "INCOMPLETE", "missing": {}, "requiredTypes": DEFAULT_REQUIRED,
             }
 
-    # 单查询聚合：每个 (company, year, month) 的 ArchiveFile 数量
-    file_count_rows = (
-        db.query(
-            ArchiveFile.company,
-            ArchiveFile.period_year,
-            ArchiveFile.period_month,
-            func.count(ArchiveFile.id),
-        )
+    file_count_rows = db.query(
+        ArchiveFile.company,
+        ArchiveFile.period_year,
+        ArchiveFile.period_month,
+        func.count(ArchiveFile.id),
     )
     if company:
         file_count_rows = file_count_rows.filter(ArchiveFile.company == company)
@@ -279,7 +299,6 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
         ).all()
     }
 
-    # 单查询取所有交付包
     pkg_query = (
         db.query(FinanceDeliveryPackage, MonthlyFinancePeriod.company,
                  MonthlyFinancePeriod.period_year, MonthlyFinancePeriod.period_month)
@@ -308,16 +327,10 @@ def period_overview(db: Session, company: str | None = None) -> list[dict[str, A
 def send_delivery(db: Session, company: str, year: int, month: int, *,
                   version: int | None = None, to_addrs: list[str] | None = None,
                   cc_addrs: list[str] | None = None, actor: str = "system") -> dict[str, Any]:
-    """发送财务交付包（规格 10 / 16）。
-
-    - SMTP 未配置 → AdapterNotConfigured（如实失败）
-    - 一个账期+版本只允许一条"首次成功发送"；再次发送标记 RESENT，不伪装成第一次
-    - 成功写 EmailDeliveryLog + audit + 更新 package.status=SENT
-    """
+    """发送财务交付包；主销售表为官方开票大类汇总。"""
     from app.adapters.mail import MailAdapter
     from app.models.finance import EmailDeliveryLog
 
-    # 先检查 SMTP 配置，未配置如实失败（不进入后续逻辑）
     adapter = MailAdapter()
     adapter.ensure_configured()
 
@@ -325,7 +338,6 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     q = db.query(FinanceDeliveryPackage).filter_by(period_id=period.id)
     if version:
         q = q.filter_by(version=version)
-    # 同一交付包的首次发送串行化，配合数据库唯一约束避免并发重复“首次发送”。
     pkg = q.order_by(FinanceDeliveryPackage.version.desc()).with_for_update().first()
     if not pkg:
         raise ValueError("该账期还没有交付包，请先打包")
@@ -336,7 +348,6 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     if not to_addrs:
         raise ValueError("未配置收件人（需在账期 required_types.emails 或发送时传入 to_addrs）")
 
-    # 幂等：首次成功发送只允许一条
     first_sent = (
         db.query(EmailDeliveryLog)
         .filter_by(package_id=pkg.id, kind="first", status="sent")
@@ -345,7 +356,11 @@ def send_delivery(db: Session, company: str, year: int, month: int, *,
     kind = "resent" if first_sent else "first"
 
     subject = f"{company} {year}年{month:02d}月 财务资料 V{version or pkg.version}"
-    body = f"见附件 {zip_path.name}\n（原样资料，SHA256: {pkg.zip_sha256}）"
+    body = (
+        f"见附件 {zip_path.name}\n"
+        "销售数据按官方开票的财务大类+税率汇总；逐条商品/SKU明细仅在系统内留存核对。\n"
+        f"SHA256: {pkg.zip_sha256}"
+    )
     try:
         message_id = adapter.send(subject, body, to_addrs, cc_addrs or [], [str(zip_path)])
     except Exception as exc:

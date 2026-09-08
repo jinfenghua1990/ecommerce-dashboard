@@ -23,7 +23,9 @@ from app.api.v1 import (
     reconciliation,
     sales_file,
     sales_outbound,
+    supply_chain,
     system,
+    tax_accounting,
     tax_invoices,
 )
 
@@ -47,8 +49,10 @@ api_router.include_router(reconciliation.router)
 api_router.include_router(sales_outbound.router)
 api_router.include_router(profit.router)
 api_router.include_router(dashboard.router)
+api_router.include_router(supply_chain.router)
 api_router.include_router(opening.router)
 api_router.include_router(closing.router)
 api_router.include_router(consumables.router)
 api_router.include_router(automation.router)
 api_router.include_router(tax_invoices.router)
+api_router.include_router(tax_accounting.router)
