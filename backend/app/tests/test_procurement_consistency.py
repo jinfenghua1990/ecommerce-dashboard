@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from app.models.catalog import ProductSku
 from app.models.jackyun import JackyunGoodsDocument, JackyunGoodsDocumentItem
