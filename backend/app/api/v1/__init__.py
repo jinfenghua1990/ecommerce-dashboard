@@ -32,9 +32,11 @@ from app.api.v1 import (
     tax_invoices,
     warehouses,
 )
+from app.services.platform_purchase_guard import install_platform_purchase_guards
 from app.services.procurement_consistency import install_purchase_guards
 
-# V1.6.3：在不改变历史 API 路径的前提下，为采购完成状态和多渠道订单幂等安装强校验。
+# V1.6.3：保持历史 API 不变，统一安装采购闭环强校验与跨渠道同号隔离。
+install_platform_purchase_guards()
 install_purchase_guards()
 
 api_router = APIRouter(prefix="/api/v1")
