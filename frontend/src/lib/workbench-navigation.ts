@@ -1,5 +1,5 @@
 export const WORKBENCH_VIEWS = {
-  orders: "采购订单", suppliers: "供应商管理", chain: "采购链路", matching: "SKU 匹配",
+  orders: "采购订单", merge: "采购合并", suppliers: "供应商管理", chain: "采购链路", matching: "SKU 匹配",
   imports: "数据接入", tax: "发票对账", dashboard: "经营总览", sales: "销售",
   products: "商品与库存", inventory_goods: "库存-正品", inventory_consumables: "库存-耗材",
   payments: "回款与对账", profit: "利润报表", finance: "财务资料",
@@ -22,6 +22,7 @@ const LEGACY_VIEWS: Record<string, WorkbenchView> = {
   "/settings": "settings", "/purchase": "orders", "/procurement-workbench": "orders",
   "/procurement-board": "orders", "/procurement-ledger": "chain", "/procurement-chain": "chain",
   "/procurement-chain/detail": "orders", "/purchase/workbench-v2": "orders",
+  "/purchase/merge": "merge",
   "/data-center-import": "imports", "/alibaba1688-import": "imports", "/jackyun-import": "imports",
   "/tax-invoices": "imports",
 };

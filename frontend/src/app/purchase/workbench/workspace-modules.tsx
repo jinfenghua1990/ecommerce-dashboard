@@ -18,6 +18,7 @@ const modules = {
   settings: dynamic(() => import("@/app/settings/page"), { loading }),
   imports: dynamic(() => import("@/app/data-center-import/page"), { loading }),
   tax: dynamic(() => import("./invoice-reconciliation-view"), { loading }),
+  merge: dynamic(() => import("@/app/purchase/merge/page"), { loading }),
 };
 
 export function WorkspaceModule({ view }: { view: WorkbenchView }) {

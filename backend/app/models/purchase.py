@@ -24,13 +24,17 @@ class Supplier(Base, PkMixin, TimestampMixin):
 class ExternalPurchaseOrder(Base, PkMixin, TimestampMixin):
     """外部采购订单主档（1688 / 拼多多 / 淘宝 / 其他渠道）。
 
-    ``external_order_id`` 是业务侧订单号；``platform`` 描述其来源。1688
-    原始订单仍保存在独立的 ``alibaba1688_orders`` 表，这里承载统一的采购工作流。
+    ``external_order_id`` 是业务侧订单号；``platform`` 描述其来源。同一个订单号
+    允许出现在不同渠道，幂等键为 ``platform + external_order_id``。1688 原始订单
+    仍保存在独立的 ``alibaba1688_orders`` 表，这里承载统一的采购工作流。
     """
 
     __tablename__ = "external_purchase_orders"
+    __table_args__ = (
+        UniqueConstraint("platform", "external_order_id", name="uq_external_purchase_platform_order"),
+    )
 
-    external_order_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    external_order_id: Mapped[str] = mapped_column(String(128), nullable=False)
     platform: Mapped[str] = mapped_column(String(32), default="1688")
     buyer_account: Mapped[str] = mapped_column(String(128), default="")
     supplier_name: Mapped[str] = mapped_column(String(256), default="", index=True)
@@ -82,7 +86,7 @@ class ExternalPurchaseOrderRawItem(Base, PkMixin):
 
 
 class PurchaseAllocationItem(Base, PkMixin, TimestampMixin):
-    """一笔 1688 订单 → N 个吉客云 SKU 分配（规格 14 关键关系）。"""
+    """一笔外部采购订单 → N 个吉客云 SKU 分配（规格 14 关键关系）。"""
 
     __tablename__ = "purchase_allocation_items"
 
@@ -97,8 +101,9 @@ class PurchaseAllocationItem(Base, PkMixin, TimestampMixin):
     # 匹配来源：manual=人工配置；auto=按供应商历史入库货品自动预填（仍需人工确认生效）
     source: Mapped[str] = mapped_column(String(16), default="manual")
     match_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
-    # 来源入库单明细行 ID（入库反填时写入）。行级占用排他的依据：
-    # 同一行入库明细只能归属一个采购单，防止共用/拆分入库单重复反填。
+    # 来源入库单明细行 ID（入库反填时写入）。默认自动反填仍保持单行排他；
+    # 合并采购单场景可通过显式“入库分摊”把同一明细行按数量分给多个采购订单，
+    # 但所有采购单分摊数量之和不得超过吉客云实际入库数量。
     source_item_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
 
 
@@ -155,8 +160,8 @@ class JackyunPurchaseOrderLink(Base, PkMixin, TimestampMixin):
 
     po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     jackyun_po_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    # 合并/拆分标注：'' 普通（一单一采购单）；merged 多张 1688 单共用一张吉客云采购单；
-    # split 一张 1688 单拆成多张吉客云采购单。alloc_amount 为本订单在该采购单中的分摊金额，
+    # 合并/拆分标注：'' 普通（一单一采购单）；merged 多张线上采购单共用一张吉客云采购单；
+    # split 一张线上采购单拆成多张吉客云采购单。alloc_amount 为本订单在该采购单中的分摊金额，
     # 合并/拆分时用于金额闭环核对（Σ alloc_amount vs 订单实付）。
     relation_kind: Mapped[str] = mapped_column(String(16), default="", nullable=False)
     alloc_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
