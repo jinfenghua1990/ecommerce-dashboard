@@ -3,32 +3,20 @@ export const WORKBENCH_VIEWS = {
   suppliers: "供应商管理",
   chain: "采购链路",
   matching: "SKU 匹配",
-  imports: "数据接入",
   tax: "发票对账",
-  dashboard: "经营总览",
-  sales: "销售",
-  products: "商品与库存",
-  inventory_goods: "库存-正品",
-  inventory_consumables: "库存-耗材",
-  payments: "回款与对账",
-  profit: "利润报表",
-  finance: "财务资料",
-  exceptions: "异常中心",
-  automation: "自动化",
-  settings: "系统设置",
 } as const;
 
 export type WorkbenchView = keyof typeof WORKBENCH_VIEWS;
 
 export function parseWorkbenchView(value: string | null): WorkbenchView {
-  // 采购工作台内部仍兼容历史 view 参数，但不再接管正式业务页面。
-  if (value === "sales_outbound") return "sales";
+  // V1.6.1：采购工作台只允许采购域内部视图。
+  // 历史 view=sales/products/finance/... 不再嵌套正式业务页面，统一回到采购订单。
   return value && value in WORKBENCH_VIEWS ? (value as WorkbenchView) : "orders";
 }
 
 /**
  * 仅兼容已经废弃的旧采购入口。
- * 正式业务页面（/、/sales、/products、/finance、/settings、库存等）必须保持独立路由，
+ * 正式业务页面（/、/sales、/products、/finance、/settings 等）必须保持独立路由，
  * 不允许再被统一重定向进 /purchase/workbench?view=…。
  *
  * 注意：侧栏正式入口会由 frontend/scripts/check-navigation-routes.mjs 在 CI 自动校验，
