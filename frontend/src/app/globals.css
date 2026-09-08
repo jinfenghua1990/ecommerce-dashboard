@@ -4,13 +4,17 @@
   color-scheme: light;
 }
 
-html {
+html,
+body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
   background: #f4f7fb;
 }
 
 body {
   margin: 0;
-  background: #f4f7fb;
+  overflow-x: hidden;
   color: #111827;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -18,6 +22,60 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * V1.6.1 统一业务工作区：
+ * - 主区永远占满侧栏之外的浏览器剩余宽度；
+ * - 业务页顶层历史 max-width 不再限制大屏展示；
+ * - 宽表格只允许在自己的 overflow-x-auto 容器内滚动。
+ */
+[data-app-main] {
+  width: 0;
+  min-width: 0;
+}
+
+.app-route-content {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-route-content > * {
+  width: 100%;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.app-route-content [class*="overflow-x-auto"] {
+  max-width: 100%;
+  overscroll-behavior-x: contain;
+}
+
+.app-route-content table {
+  max-width: none;
+}
+
+/*
+ * 采购工作台历史上自带 WorkbenchSidebar。
+ * V1.6.1 已由 AuthShell 提供统一深色侧栏，因此仅隐藏采购页内部旧侧栏，
+ * 保留其订单 / 供应商 / 链路 / 匹配等业务视图和移动端下拉导航。
+ */
+main[data-purchase-workbench="true"] .app-route-content > div > div > aside:first-child {
+  display: none !important;
+}
+
+main[data-purchase-workbench="true"] .app-route-content > div,
+main[data-purchase-workbench="true"] .app-route-content > div > div,
+main[data-purchase-workbench="true"] .app-route-content > div > div > main {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+main[data-purchase-workbench="true"] .app-route-content > div {
+  min-height: 100%;
+  background: #f4f7fb;
 }
 
 ::selection {
