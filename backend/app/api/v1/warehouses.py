@@ -27,6 +27,7 @@ class WarehouseCreateBody(BaseModel):
     is_sellable: bool = False
     status: str = "active"
     note: str = ""
+    jackyun_warehouse_id: str | None = Field(default=None, max_length=64)
 
 
 class WarehouseUpdateBody(BaseModel):
@@ -37,6 +38,8 @@ class WarehouseUpdateBody(BaseModel):
     is_sellable: bool | None = None
     status: str | None = None
     note: str | None = None
+    # 传空字符串可解除绑定；传 null/不传则保持现有绑定。
+    jackyun_warehouse_id: str | None = Field(default=None, max_length=64)
 
 
 class WarehouseReceiptItemBody(BaseModel):
