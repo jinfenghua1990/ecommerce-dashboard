@@ -61,9 +61,9 @@ export default function AuthShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen bg-[#f4f7fb]">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto px-8 py-6">{children}</main>
+      <main className="min-w-0 flex-1 overflow-y-auto px-6 py-5 xl:px-8 xl:py-6">{children}</main>
     </div>
   );
 }
