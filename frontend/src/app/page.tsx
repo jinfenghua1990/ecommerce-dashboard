@@ -142,7 +142,6 @@ export default function OverviewPage() {
   }, []);
 
   const metrics = data?.metrics || {};
-  const salesAmount = toNumber(metrics.salesAmount);
   const netSales = toNumber(metrics.netSales);
   const grossProfit = toNumber(metrics.grossProfit);
   const refundRate = toNumber(metrics.refundRate);
@@ -202,7 +201,7 @@ export default function OverviewPage() {
     : "";
 
   return (
-    <div className="mx-auto max-w-[1580px] pb-8">
+    <div className="w-full min-w-0 pb-8">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -256,7 +255,7 @@ export default function OverviewPage() {
             {QUICK_ACTIONS.map((item) => (
               <Link key={item.href} href={item.href} className="group rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-center transition-all hover:-translate-y-0.5 hover:border-slate-200 hover:bg-white hover:shadow-md">
                 <div className={`mx-auto flex h-10 w-10 items-center justify-center rounded-xl text-sm font-semibold ${item.className}`}>{item.symbol}</div>
-                <div className="mt-2 text-xs font-medium text-slate-600 group-hover:text-[#1f5fbf]">{item.label}</div>
+                <div className="mt-2 text-[11px] font-medium text-slate-600 group-hover:text-[#245fb8]">{item.label}</div>
               </Link>
             ))}
           </div>
@@ -264,53 +263,88 @@ export default function OverviewPage() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <SectionCard title="数据连接状态" className="xl:col-span-4" action={<Link href="/settings" className="text-xs font-medium text-[#3478df] hover:text-[#1f63c7]">连接设置 →</Link>}>
-          <div className="flex items-center gap-6 p-5">
-            <div className="relative h-32 w-32 shrink-0 rounded-full" style={{ background: donutBackground }}>
-              <div className="absolute inset-[15px] flex flex-col items-center justify-center rounded-full bg-white shadow-inner">
-                <div className="text-2xl font-semibold text-[#17233c]">{integrationStats.total}</div>
-                <div className="text-[10px] text-slate-400">数据源</div>
-              </div>
-            </div>
-            <div className="min-w-0 flex-1 space-y-3 text-xs">
-              <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-slate-500"><i className="h-2.5 w-2.5 rounded-full bg-[#4f8df7]" />正常</span><b className="font-medium text-slate-700">{integrationStats.healthy}</b></div>
-              <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-slate-500"><i className="h-2.5 w-2.5 rounded-full bg-[#f2b24f]" />待配置 / 注意</span><b className="font-medium text-slate-700">{integrationStats.warning}</b></div>
-              <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-slate-500"><i className="h-2.5 w-2.5 rounded-full bg-[#ef6f6c]" />异常</span><b className="font-medium text-slate-700">{integrationStats.error}</b></div>
-            </div>
+        <SectionCard title="数据连接状态" className="xl:col-span-8" action={<Link href="/settings" className="text-xs font-medium text-[#3478df] hover:text-[#1f63c7]">管理连接 →</Link>}>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="bg-slate-50/80 text-left text-[11px] text-slate-400">
+                <tr>
+                  <th className="px-5 py-2.5 font-medium">系统</th>
+                  <th className="px-4 py-2.5 font-medium">接入方式</th>
+                  <th className="px-4 py-2.5 font-medium">状态</th>
+                  <th className="px-5 py-2.5 text-right font-medium">最近测试</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {data.integrations.map((item) => (
+                  <tr key={item.id} className="hover:bg-slate-50/60">
+                    <td className="px-5 py-3 font-medium text-[#26324b]">{item.name}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{item.mode}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={item.status} />
+                      {item.errorSummary && <span className="ml-2 text-[11px] text-rose-500" title={item.errorSummary}>{item.errorSummary.slice(0, 44)}</span>}
+                    </td>
+                    <td className="px-5 py-3 text-right text-[11px] text-slate-400">{item.lastTestedAt ? new Date(item.lastTestedAt).toLocaleString("zh-CN") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </SectionCard>
 
-        <SectionCard title="数据连接明细" className="xl:col-span-5" action={<Link href="/data-center-import" className="text-xs font-medium text-[#3478df] hover:text-[#1f63c7]">数据接入 →</Link>}>
-          <div className="divide-y divide-slate-100 px-5">
-            {data.integrations.slice(0, 6).map((item) => (
-              <div key={item.id} className="flex items-center gap-3 py-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-100">源</div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium text-slate-700">{item.name}</div>
-                  <div className="mt-0.5 truncate text-[10px] text-slate-400">{item.mode}</div>
+        <SectionCard title="连接健康度" className="xl:col-span-4">
+          <div className="flex flex-col items-center justify-center gap-5 p-5 sm:flex-row xl:flex-col 2xl:flex-row">
+            <div className="relative h-36 w-36 shrink-0 rounded-full" style={{ background: donutBackground }}>
+              <div className="absolute inset-[17px] flex flex-col items-center justify-center rounded-full bg-white shadow-inner">
+                <div className="text-[24px] font-semibold text-[#17233c]">{integrationStats.total}</div>
+                <div className="text-[10px] text-slate-400">个数据源</div>
+              </div>
+            </div>
+            <div className="w-full space-y-3 text-xs">
+              {[
+                ["正常", integrationStats.healthy, "bg-[#4f8df7]"],
+                ["待处理", integrationStats.warning, "bg-[#f2b24f]"],
+                ["异常", integrationStats.error, "bg-[#ef6f6c]"],
+              ].map(([label, count, color]) => (
+                <div key={String(label)} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5">
+                  <span className="flex items-center gap-2 text-slate-500"><span className={`h-2.5 w-2.5 rounded-full ${color}`} />{label}</span>
+                  <span className="font-semibold text-[#17233c]">{count}</span>
                 </div>
-                <StatusBadge status={item.status} />
-              </div>
-            ))}
-            {data.integrations.length === 0 && <div className="py-8 text-center text-xs text-slate-400">暂无数据连接</div>}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="待办事项" className="xl:col-span-3" action={<Link href="/exceptions" className="text-xs font-medium text-[#3478df] hover:text-[#1f63c7]">查看全部 →</Link>}>
-          <div className="divide-y divide-slate-100 px-4">
-            {todos.map((item, index) => (
-              <Link key={`${item.label}-${index}`} href={item.href} className="flex items-center gap-3 py-3.5 transition-colors hover:bg-slate-50/70">
-                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ${item.tone}`}>{index + 1}</div>
-                <div className="min-w-0 flex-1 truncate text-xs text-slate-600">{item.label}</div>
-                {item.count && <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">{item.count}</span>}
-              </Link>
-            ))}
+              ))}
+            </div>
           </div>
         </SectionCard>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-slate-200/80 bg-white px-5 py-4 text-[11px] text-slate-400 shadow-[0_8px_26px_rgba(31,55,86,0.04)]">
-        当前总览只展示已有真实业务数据；没有可靠数据来源的趋势、预测和订单列表不会使用模拟数据填充。
+      <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-12">
+        <SectionCard title="待办事项" className="xl:col-span-5" action={<Link href="/exceptions" className="text-xs font-medium text-[#3478df] hover:text-[#1f63c7]">查看异常中心 →</Link>}>
+          <div className="divide-y divide-slate-100 px-4">
+            {todos.map((todo) => (
+              <Link key={todo.label} href={todo.href} className="flex items-center gap-3 py-3.5 hover:bg-slate-50/60">
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold ${todo.tone}`}>{todo.label.slice(0, 1)}</span>
+                <span className="min-w-0 flex-1 text-xs text-slate-600">{todo.label}</span>
+                {todo.count && <span className="max-w-[150px] truncate rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-medium text-slate-600">{todo.count}</span>}
+                <span className="text-slate-300">›</span>
+              </Link>
+            ))}
+          </div>
+        </SectionCard>
+
+        <SectionCard title="本月经营摘要" className="xl:col-span-7">
+          <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              ["销售额", money(metrics.salesAmount), "销售真实口径"],
+              ["净销售", money(metrics.netSales), "销售扣除有效退款后的经营口径"],
+              ["退款率", percentage(metrics.refundRate), "月度退款比例"],
+              ["待回款", money(metrics.pendingReceive), "进入回款与对账继续处理"],
+            ].map(([label, value, hint]) => (
+              <div key={label} className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                <div className="text-[11px] text-slate-400">{label}</div>
+                <div className="mt-2 truncate text-lg font-semibold text-[#17233c]">{value}</div>
+                <div className="mt-1 text-[10px] leading-4 text-slate-400">{hint}</div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
       </div>
     </div>
   );
