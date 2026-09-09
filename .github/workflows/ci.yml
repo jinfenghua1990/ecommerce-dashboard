@@ -175,6 +175,94 @@ jobs:
           cd frontend && npm run build
           test -f out/index.html
 
+  ui-runtime:
+    name: UI runtime (real browser + rendered buttons)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ecommerce
+          POSTGRES_USER: ecommerce
+          POSTGRES_PASSWORD: ecommerce
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ecommerce -d ecommerce"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://ecommerce:ecommerce@127.0.0.1:5432/ecommerce
+      REDIS_URL: redis://127.0.0.1:6379/0
+      APP_SECRET_KEY: ci-only-ui-runtime-secret-2026
+      JACKYUN_SYNC_MODE: manual
+      ADMIN_USERNAME: ci-admin
+      ADMIN_PASSWORD: ci-only-ui-password
+      UI_TEST_USERNAME: ci-admin
+      UI_TEST_PASSWORD: ci-only-ui-password
+      BASE: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend and Chromium
+        run: |
+          pip install -r backend/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Build production frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          test -f out/index.html
+      - name: Migrate and seed isolated UI database
+        run: |
+          cd backend
+          alembic upgrade head
+          python -m app.seed
+      - name: Real browser route and button checks
+        run: |
+          set -euo pipefail
+          cd backend
+          FRONTEND_OUT="$GITHUB_WORKSPACE/frontend/out" \
+            uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/ui-runtime-server.log 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            status=$?
+            if [[ $status -ne 0 ]]; then
+              echo "--- server log ---"
+              cat /tmp/ui-runtime-server.log || true
+            fi
+            kill "$SERVER_PID" >/dev/null 2>&1 || true
+            exit "$status"
+          }
+          trap cleanup EXIT
+          cd "$GITHUB_WORKSPACE"
+          for _ in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:8000/login >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/login >/dev/null
+          python scripts/ui-runtime-check.py
+
   deployment:
     name: Deployment image (single-port 8000)
     runs-on: ubuntu-latest
