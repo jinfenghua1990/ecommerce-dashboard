@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -50,10 +49,6 @@ ROUTES = [
     "/settings",
 ]
 
-SKIP_BUTTON_TEXT = {
-    "退出登录",  # 最后单独验证，避免中途丢失会话
-}
-
 FATAL_TEXT = (
     "Application error",
     "Internal Server Error",
@@ -67,6 +62,11 @@ class Failure:
     route: str
     button: str
     detail: str
+
+
+def is_logout_label(label: str) -> bool:
+    """侧栏文案历史上出现过“退出”和“退出登录”，两者都留到最后单独验收。"""
+    return re.fullmatch(r"退出(?:登录)?", label.strip()) is not None
 
 
 def label_of(page: Page, index: int) -> str:
@@ -128,7 +128,7 @@ def test_button(page: Page, route: str, index: int) -> tuple[list[Failure], bool
     if index >= buttons.count():
         return failures, False
     label = label_of(page, index)
-    if label in SKIP_BUTTON_TEXT:
+    if is_logout_label(label):
         return failures, False
 
     button = buttons.nth(index)
@@ -259,7 +259,7 @@ def main() -> int:
             print(f"[{route}] 可见 enabled 按钮 {initial_count}: {', '.join(labels) if labels else '-'}")
 
             for i, label in enumerate(labels):
-                if label in SKIP_BUTTON_TEXT:
+                if is_logout_label(label):
                     continue
                 result, observable = test_button(page, route, i)
                 failures.extend(result)
@@ -268,19 +268,19 @@ def main() -> int:
                     if not observable:
                         warnings.append(f"{route} :: {label}（点击后无可观测变化，静态 handler 检查已覆盖）")
 
-        # 退出登录单独验证。
+        # 退出登录单独验证，兼容侧栏“退出”/“退出登录”两种文案。
         page.goto(f"{BASE}/", wait_until="domcontentloaded", timeout=15000)
         wait_ready(page)
-        logout = page.get_by_role("button", name="退出登录", exact=True)
+        logout = page.get_by_role("button", name=re.compile(r"^退出(?:登录)?$"))
         if logout.count() == 1:
             logout.click(timeout=4000)
             page.wait_for_url(lambda url: urlparse(url).path == "/login", timeout=8000)
             if urlparse(page.url).path != "/login":
-                failures.append(Failure("/", "退出登录", "点击后未回到 /login"))
+                failures.append(Failure("/", "退出", "点击后未回到 /login"))
             else:
                 clicked += 1
         else:
-            failures.append(Failure("/", "退出登录", "未找到唯一退出登录按钮"))
+            failures.append(Failure("/", "退出", "未找到唯一退出按钮"))
 
         context.close()
         browser.close()
